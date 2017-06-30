@@ -136,7 +136,6 @@ import java.util.List;
  *   -I normal.bam \
  *   -normal normal_sample_name \
  *   --germline_resource af-only-gnomad.vcf.gz \
- *   --normal_panel pon.vcf.gz \
  *   -L intervals.list \
  *   -O tumor_matched_m2_snvs_indels.vcf.gz
  * </pre>
@@ -148,7 +147,6 @@ import java.util.List;
  *   -I tumor.bam \
  *   -tumor tumor_sample_name \
  *   --germline_resource af-only-gnomad.vcf.gz \
- *   --normal_panel pon.vcf.gz \
  *   -L intervals.list \
  *   -O tumor_unmatched_m2_snvs_indels.vcf.gz
  * </pre>
