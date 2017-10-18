@@ -21,7 +21,6 @@ import org.broadinstitute.hellbender.tools.copynumber.formats.metadata.SimpleSam
 import org.broadinstitute.hellbender.utils.Nucleotide;
 
 import java.io.File;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -83,8 +82,8 @@ import java.util.List;
  * @author Samuel Lee &lt;slee@broadinstitute.org&gt;
  */
 @CommandLineProgramProperties(
-        summary = "Collects ref/alt counts at sites.",
-        oneLineSummary = "Collects ref/alt counts at sites.",
+        summary = "Collect ref/alt counts at sites.",
+        oneLineSummary = "Collect ref/alt counts at sites.",
         programGroup = CopyNumberProgramGroup.class
 )
 @DocumentedFeature

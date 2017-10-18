@@ -28,7 +28,9 @@ import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 
 import java.io.File;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
