@@ -33,6 +33,18 @@ public final class PreprocessIntervalsIntegrationTest extends CommandLineProgram
                 new Interval("20", 13_000, 20_000)
         );
 
+        // Test for no binning (specified by zero bin length)
+        final int binLengthNoBinningTest = 0;
+        final int paddingLengthNoBinningTest = 0;
+        final List<Interval> inputIntervalsNoBinningTest = Arrays.asList(
+                new Interval("20", 3_000, 20_000),
+                new Interval("20", 200, 1_900)
+        );
+        final List<Interval> expectedBinsNoBinningTest = Arrays.asList(
+                new Interval("20", 200, 1_900),
+                new Interval("20", 3_000, 20_000)
+        );
+
         // Test for overlapping intervals
         final int binLengthOverlappingIntervalTest = 10_000;
         final int paddingLengthOverlappingIntervalTest = 500;
@@ -95,6 +107,7 @@ public final class PreprocessIntervalsIntegrationTest extends CommandLineProgram
         // Return all test data
         return new Object[][]{
                 {binLengthSeparateIntervalTest, paddingLengthSeparateIntervalTest, inputIntervalsSeparateIntervalTest, expectedBinsSeparateIntervalTest},
+                {binLengthNoBinningTest, paddingLengthNoBinningTest, inputIntervalsNoBinningTest, expectedBinsNoBinningTest},
                 {binLengthOverlappingIntervalTest, paddingLengthOverlappingIntervalTest, inputIntervalsOverlappingIntervalTest, expectedBinsOverlappingIntervalTest},
                 {binLengthEdgeIntervalTest, paddingLengthEdgeIntervalTest, inputIntervalsEdgeIntervalTest, expectedBinsEdgeIntervalTest},
                 {binLengthWholeChromosomeTest, paddingLengthWholeChromosomeTest, inputIntervalsWholeChromosomeTest, expectedBinsWholeChromosomeTest},

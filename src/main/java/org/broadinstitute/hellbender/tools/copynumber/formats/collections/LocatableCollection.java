@@ -60,7 +60,7 @@ public abstract class LocatableCollection<RECORD extends Locatable> extends Reco
     //check for ordering, duplicates, and overlaps
     private static <T extends Locatable> void validateIntervals(final List<T> records) {
         if (!Ordering.from(LEXICOGRAPHICAL_ORDER_COMPARATOR).isStrictlyOrdered(records)) {
-            throw new IllegalArgumentException("Records fwere not strictly sorted in lexicographical order.");
+            throw new IllegalArgumentException("Records were not strictly sorted in lexicographical order.");
         }
         final OptionalInt failureIndex = IntStream.range(1, records.size())
                 .filter(i -> IntervalUtils.overlaps(records.get(i - 1), records.get(i)))
