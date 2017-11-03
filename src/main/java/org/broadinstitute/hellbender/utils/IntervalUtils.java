@@ -225,7 +225,14 @@ public final class IntervalUtils {
                 intervals = getIntervalsWithFlanks(genomeLocParser, intervals, padding);
             }
 
-            allIntervals = mergeListsBySetOperator(intervals, allIntervals, intervalSetRule);
+            // In order to prevent the repeated allocation and copying of the entire accumulated interval list
+            // that mergeListsBySetOperator does every time through this loop (necessary because it returns an
+            // unmodifiable collection), short circuit in the case of UNION and just accumulate directly.
+            if (intervalSetRule == IntervalSetRule.UNION) {
+                allIntervals.addAll(intervals);
+            } else {
+                allIntervals = mergeListsBySetOperator(intervals, allIntervals, intervalSetRule);
+            }
         }
 
         return sortAndMergeIntervals(genomeLocParser, allIntervals, intervalMergingRule);
