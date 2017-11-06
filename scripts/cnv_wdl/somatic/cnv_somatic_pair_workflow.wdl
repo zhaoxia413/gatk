@@ -32,14 +32,14 @@ workflow CNVSomaticPairWorkflow {
     File ref_fasta_dict
     File ref_fasta_fai
     File read_count_pon
-    String gatk_jar
+    File? gatk4_jar_override
     String gatk_docker
 
     call CNVTasks.PreprocessIntervals {
         input:
             intervals = intervals,
             ref_fasta_dict = ref_fasta_dict,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -48,7 +48,7 @@ workflow CNVSomaticPairWorkflow {
             intervals = PreprocessIntervals.preprocessed_intervals,
             bam = tumor_bam,
             bam_idx = tumor_bam_idx,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -57,7 +57,7 @@ workflow CNVSomaticPairWorkflow {
             intervals = PreprocessIntervals.preprocessed_intervals,
             bam = normal_bam,
             bam_idx = normal_bam_idx,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -69,7 +69,7 @@ workflow CNVSomaticPairWorkflow {
             ref_fasta = ref_fasta,
             ref_fasta_dict = ref_fasta_dict,
             ref_fasta_fai = ref_fasta_fai,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -81,7 +81,7 @@ workflow CNVSomaticPairWorkflow {
             ref_fasta = ref_fasta,
             ref_fasta_dict = ref_fasta_dict,
             ref_fasta_fai = ref_fasta_fai,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -90,7 +90,7 @@ workflow CNVSomaticPairWorkflow {
             entity_id = CollectCountsTumor.entity_id,
             read_counts = CollectCountsTumor.counts,
             read_count_pon = read_count_pon,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -99,7 +99,7 @@ workflow CNVSomaticPairWorkflow {
             entity_id = CollectCountsNormal.entity_id,
             read_counts = CollectCountsNormal.counts,
             read_count_pon = read_count_pon,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -109,7 +109,7 @@ workflow CNVSomaticPairWorkflow {
             denoised_copy_ratios = DenoiseReadCountsTumor.denoised_copy_ratios,
             allelic_counts = CollectAllelicCountsTumor.allelic_counts,
             normal_allelic_counts = CollectAllelicCountsNormal.allelic_counts,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -118,7 +118,7 @@ workflow CNVSomaticPairWorkflow {
             entity_id = CollectCountsNormal.entity_id,
             denoised_copy_ratios = DenoiseReadCountsNormal.denoised_copy_ratios,
             allelic_counts = CollectAllelicCountsNormal.allelic_counts,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -127,7 +127,7 @@ workflow CNVSomaticPairWorkflow {
             entity_id = CollectCountsTumor.entity_id,
             denoised_copy_ratios = DenoiseReadCountsTumor.denoised_copy_ratios,
             copy_ratio_segments = ModelSegmentsTumor.copy_ratio_only_segments,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -136,7 +136,7 @@ workflow CNVSomaticPairWorkflow {
             entity_id = CollectCountsNormal.entity_id,
             denoised_copy_ratios = DenoiseReadCountsNormal.denoised_copy_ratios,
             copy_ratio_segments = ModelSegmentsNormal.copy_ratio_only_segments,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -146,7 +146,7 @@ workflow CNVSomaticPairWorkflow {
             standardized_copy_ratios = DenoiseReadCountsTumor.standardized_copy_ratios,
             denoised_copy_ratios = DenoiseReadCountsTumor.denoised_copy_ratios,
             ref_fasta_dict = ref_fasta_dict,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -156,7 +156,7 @@ workflow CNVSomaticPairWorkflow {
             standardized_copy_ratios = DenoiseReadCountsNormal.standardized_copy_ratios,
             denoised_copy_ratios = DenoiseReadCountsNormal.denoised_copy_ratios,
             ref_fasta_dict = ref_fasta_dict,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -167,7 +167,7 @@ workflow CNVSomaticPairWorkflow {
             het_allelic_counts = ModelSegmentsTumor.het_allelic_counts,
             modeled_segments = ModelSegmentsTumor.modeled_segments,
             ref_fasta_dict = ref_fasta_dict,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 
@@ -178,7 +178,7 @@ workflow CNVSomaticPairWorkflow {
             het_allelic_counts = ModelSegmentsNormal.het_allelic_counts,
             modeled_segments = ModelSegmentsNormal.modeled_segments,
             ref_fasta_dict = ref_fasta_dict,
-            gatk_jar = gatk_jar,
+            gatk4_jar_override = gatk4_jar_override,
             gatk_docker = gatk_docker
     }
 }
@@ -188,7 +188,7 @@ task DenoiseReadCounts {
     File read_counts
     File read_count_pon
     Int? number_of_eigensamples #use all eigensamples in panel by default
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -197,7 +197,10 @@ task DenoiseReadCounts {
     Int? disk_space_gb
 
     command {
-        java -Xmx${default="4" mem}g -jar ${gatk_jar} DenoiseReadCounts \
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default="4" mem}g -jar $GATK_JAR DenoiseReadCounts \
             --input ${read_counts} \
             --readCountPanelOfNormals ${read_count_pon} \
             ${"--numberOfEigensamples " + number_of_eigensamples} \
@@ -243,7 +246,7 @@ task ModelSegments {
     Int? max_num_smoothing_iterations
     Int? num_smoothing_iterations_per_fit
     String? output_dir
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -255,7 +258,10 @@ task ModelSegments {
     String output_dir_ = select_first([output_dir, "."])
 
     command {
-        java -Xmx${default="4" mem}g -jar ${gatk_jar} ModelSegments \
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default="4" mem}g -jar $GATK_JAR ModelSegments \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             --allelicCounts ${allelic_counts} \
             ${"--normalAllelicCounts " + normal_allelic_counts} \
@@ -306,7 +312,7 @@ task CallCopyRatioSegments {
     String entity_id
     File denoised_copy_ratios
     File copy_ratio_segments
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -315,7 +321,10 @@ task CallCopyRatioSegments {
     Int? disk_space_gb
 
     command {
-        java -Xmx${default="4" mem}g -jar ${gatk_jar} CallCopyRatioSegments \
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default="4" mem}g -jar $GATK_JAR CallCopyRatioSegments \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             --segments ${copy_ratio_segments} \
             --output ${entity_id}.called.seg
@@ -340,7 +349,7 @@ task PlotDenoisedCopyRatios {
     File ref_fasta_dict
     Int? minimum_contig_length
     String? output_dir
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -352,8 +361,11 @@ task PlotDenoisedCopyRatios {
     String output_dir_ = select_first([output_dir, "."])
 
     command {
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
         mkdir -p ${output_dir_}; \
-        java -Xmx${default="4" mem}g -jar ${gatk_jar} PlotDenoisedCopyRatios \
+        java -Xmx${default="4" mem}g -jar $GATK_JAR PlotDenoisedCopyRatios \
             --standardizedCopyRatios ${standardized_copy_ratios} \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             -SD ${ref_fasta_dict} \
@@ -387,7 +399,7 @@ task PlotModeledSegments {
     File ref_fasta_dict
     Int? minimum_contig_length
     String? output_dir
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -399,8 +411,11 @@ task PlotModeledSegments {
     String output_dir_ = select_first([output_dir, "."])
 
     command {
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
         mkdir -p ${output_dir_}; \
-        java -Xmx${default="4" mem}g -jar ${gatk_jar} PlotModeledSegments \
+        java -Xmx${default="4" mem}g -jar $GATK_JAR PlotModeledSegments \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             --allelicCounts ${het_allelic_counts} \
             --segments ${modeled_segments} \

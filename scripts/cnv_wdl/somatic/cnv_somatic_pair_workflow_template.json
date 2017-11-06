@@ -9,6 +9,6 @@
   "CNVSomaticPairWorkflow.ref_fasta": "$__ref_fasta__",
   "CNVSomaticPairWorkflow.ref_fasta_dict": "$__ref_fasta_dict__",
   "CNVSomaticPairWorkflow.ref_fasta_fai": "$__ref_fasta_fai__",
-  "CNVSomaticPairWorkflow.gatk_jar": "$__gatk_jar__",
+  "CNVSomaticPairWorkflow.gatk4_jar_override": "$__gatk4_jar_override__",
   "CNVSomaticPairWorkflow.gatk_docker": "$__gatk_docker__"
 }

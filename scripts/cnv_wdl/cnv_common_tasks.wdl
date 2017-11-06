@@ -6,7 +6,7 @@
 task PadTargets {
     File targets
     Int? padding
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -19,7 +19,12 @@ task PadTargets {
     String base_filename = basename(filename, ".tsv")
 
     command {
-        java -Xmx${default="1" mem}g -jar ${gatk_jar} PadTargets \
+        set -e
+
+        # Use GATK Jar override if specified
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default="1" mem}g -jar $GATK_JAR PadTargets \
             --targets ${targets} \
             --padding ${default="250" padding} \
             --output ${base_filename}.padded.tsv
@@ -42,7 +47,7 @@ task PreprocessIntervals {
     File ref_fasta_dict
     Int? padding
     Int? bin_length
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -55,7 +60,10 @@ task PreprocessIntervals {
     String base_filename = basename(filename, ".interval_list")
 
     command {
-        java -Xmx${default="2" mem}g -jar ${gatk_jar} PreprocessIntervals \
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default="2" mem}g -jar $GATK_JAR PreprocessIntervals \
             ${"-L " + intervals} \
             -sequenceDictionary ${ref_fasta_dict} \
             --padding ${default="250" padding} \
@@ -83,7 +91,7 @@ task AnnotateTargets {
     File ref_fasta
     File ref_fasta_fai
     File ref_fasta_dict
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -92,7 +100,10 @@ task AnnotateTargets {
     Int? disk_space_gb
 
     command {
-        java -Xmx${default="4" mem}g -jar ${gatk_jar} AnnotateTargets \
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default="4" mem}g -jar $GATK_JAR AnnotateTargets \
             --targets ${intervals} \
             --reference ${ref_fasta} \
             --interval_merging_rule OVERLAPPING_ONLY \
@@ -116,7 +127,7 @@ task AnnotateIntervals {
     File ref_fasta
     File ref_fasta_fai
     File ref_fasta_dict
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -125,7 +136,10 @@ task AnnotateIntervals {
     Int? disk_space_gb
 
     command {
-        java -Xmx${default="4" mem}g -jar ${gatk_jar} AnnotateIntervals \
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default="4" mem}g -jar $GATK_JAR AnnotateIntervals \
             -L ${intervals} \
             --reference ${ref_fasta} \
             --interval_merging_rule OVERLAPPING_ONLY \
@@ -157,7 +171,7 @@ task CollectReadCounts {
     Boolean? disable_all_read_filters
     Boolean? disable_sequence_dictionary_validation
     Boolean? keep_duplicate_reads
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -176,9 +190,12 @@ task CollectReadCounts {
     String intervals_filename = if is_wgs then "${base_filename}.readCounts.intervals.tsv" else select_first([padded_targets, ""])
 
     command <<<
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
         if [ ${is_wgs} = true ]
             then
-                java -Xmx${default="8" mem}g -jar ${gatk_jar} SparkGenomeReadCounts \
+                java -Xmx${default="8" mem}g -jar $GATK_JAR SparkGenomeReadCounts \
                     --input ${bam} \
                     --reference ${ref_fasta} \
                     --binLength ${default="1000" wgs_bin_length} \
@@ -189,7 +206,7 @@ task CollectReadCounts {
                     --output ${read_counts_tsv_filename} \
                     --writeHdf5
             else
-                java -Xmx${default="4" mem}g -jar ${gatk_jar} CalculateTargetCoverage \
+                java -Xmx${default="4" mem}g -jar $GATK_JAR CalculateTargetCoverage \
                     --input ${bam} \
                     --reference ${ref_fasta} \
                     --targets ${padded_targets} \
@@ -228,7 +245,7 @@ task CollectCounts {
     File bam
     File bam_idx
     String? output_format
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -241,7 +258,10 @@ task CollectCounts {
     String counts_filename = if !defined(output_format) then "${base_filename}.counts.hdf5" else "${base_filename}.counts.tsv"
 
     command {
-        java -Xmx${default="8" mem}g -jar ${gatk_jar} CollectFragmentCounts \
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default="8" mem}g -jar $GATK_JAR CollectFragmentCounts \
             --input ${bam} \
             -L ${intervals} \
             --outputFormat ${default="HDF5" output_format} \
@@ -271,7 +291,7 @@ task CollectAllelicCounts {
     File ref_fasta_fai
     File ref_fasta_dict
     Int? minimum_base_quality
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -285,7 +305,10 @@ task CollectAllelicCounts {
     String allelic_counts_filename = "${base_filename}.allelicCounts.tsv"
 
     command {
-        java -Xmx${default="8" mem}g -jar ${gatk_jar} CollectAllelicCounts \
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default="8" mem}g -jar $GATK_JAR CollectAllelicCounts \
             -L ${common_sites} \
             --input ${bam} \
             --reference ${ref_fasta} \
@@ -311,7 +334,7 @@ task CorrectGCBias {
     String entity_id
     File coverage   # This can be either single-sample or multi-sample
     File annotated_intervals
-    String gatk_jar
+    File? gatk4_jar_override
 
     # Runtime parameters
     Int? mem
@@ -320,7 +343,10 @@ task CorrectGCBias {
     Int? disk_space_gb
 
     command {
-        java -Xmx${default=4 mem}g -jar ${gatk_jar} CorrectGCBias \
+        set -e
+        GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
+
+        java -Xmx${default=4 mem}g -jar $GATK_JAR CorrectGCBias \
           --input ${coverage} \
           --targets ${annotated_intervals} \
           --output ${entity_id}.gc_corrected.tsv
