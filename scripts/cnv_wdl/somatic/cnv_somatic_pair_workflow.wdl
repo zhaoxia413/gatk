@@ -254,14 +254,15 @@ task ModelSegments {
     Int? preemptible_attempts
     Int? disk_space_gb
 
-    # If optional output_dir not specified, use "."
-    String output_dir_ = select_first([output_dir, "."])
+    # If optional output_dir not specified, use "out"
+    String output_dir_ = select_first([output_dir, "out"])
 
     command {
         set -e
+        mkdir ${output_dir_}
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        java -Xmx${default="4" mem}g -jar $GATK_JAR ModelSegments \
+        java -Xmx${default="10" mem}g -jar $GATK_JAR ModelSegments \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             --allelicCounts ${allelic_counts} \
             ${"--normalAllelicCounts " + normal_allelic_counts} \
@@ -286,18 +287,20 @@ task ModelSegments {
             --numSmoothingIterationsPerFit ${default=0 num_smoothing_iterations_per_fit} \
             --output ${output_dir_} \
             --outputPrefix ${entity_id}
+
+        touch ${output_dir_}/${entity_id}.hets.normal.tsv
     }
 
     runtime {
         docker: "${gatk_docker}"
-        memory: select_first([mem, 5]) + " GB"
+        memory: select_first([mem, 16]) + " GB"
         disks: "local-disk " + select_first([disk_space_gb, 100]) + " HDD"
         preemptible: select_first([preemptible_attempts, 2])
     }
 
     output {
         File het_allelic_counts = "${output_dir_}/${entity_id}.hets.tsv"
-        File? normal_het_allelic_counts = if defined(normal_allelic_counts) then "${output_dir_}/${entity_id}.hets.normal.tsv" else ""   #tumor is run in matched-normal mode, so a hets file is also produced for the matched normal
+        File normal_het_allelic_counts = "${output_dir_}/${entity_id}.hets.normal.tsv"
         File copy_ratio_only_segments = "${output_dir_}/${entity_id}.cr.seg"
         File modeled_segments_begin = "${output_dir_}/${entity_id}.modelBegin.seg"
         File copy_ratio_parameters_begin = "${output_dir_}/${entity_id}.modelBegin.cr.param"
@@ -324,7 +327,7 @@ task CallCopyRatioSegments {
         set -e
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        java -Xmx${default="4" mem}g -jar $GATK_JAR CallCopyRatioSegments \
+        java -Xmx${default="8" mem}g -jar $GATK_JAR CallCopyRatioSegments \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             --segments ${copy_ratio_segments} \
             --output ${entity_id}.called.seg
@@ -332,7 +335,7 @@ task CallCopyRatioSegments {
 
     runtime {
         docker: "${gatk_docker}"
-        memory: select_first([mem, 5]) + " GB"
+        memory: select_first([mem, 12]) + " GB"
         disks: "local-disk " + select_first([disk_space_gb, 100]) + " HDD"
         preemptible: select_first([preemptible_attempts, 2])
     }
@@ -357,14 +360,14 @@ task PlotDenoisedCopyRatios {
     Int? preemptible_attempts
     Int? disk_space_gb
 
-    # If optional output_dir not specified, use "."
-    String output_dir_ = select_first([output_dir, "."])
+    # If optional output_dir not specified, use "out"
+    String output_dir_ = select_first([output_dir, "out"])
 
     command {
         set -e
+        mkdir ${output_dir_}
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        mkdir -p ${output_dir_}; \
         java -Xmx${default="4" mem}g -jar $GATK_JAR PlotDenoisedCopyRatios \
             --standardizedCopyRatios ${standardized_copy_ratios} \
             --denoisedCopyRatios ${denoised_copy_ratios} \
@@ -407,14 +410,14 @@ task PlotModeledSegments {
     Int? preemptible_attempts
     Int? disk_space_gb
 
-    # If optional output_dir not specified, use "."
-    String output_dir_ = select_first([output_dir, "."])
+    # If optional output_dir not specified, use "out"
+    String output_dir_ = select_first([output_dir, "out"])
 
     command {
         set -e
+        mkdir ${output_dir_}
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        mkdir -p ${output_dir_}; \
         java -Xmx${default="4" mem}g -jar $GATK_JAR PlotModeledSegments \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             --allelicCounts ${het_allelic_counts} \
