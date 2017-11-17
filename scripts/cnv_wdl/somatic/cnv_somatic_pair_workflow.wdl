@@ -35,32 +35,51 @@ workflow CNVSomaticPairWorkflow {
     File? gatk4_jar_override
     String gatk_docker
 
+    Int ref_size = ceil(size(ref_fasta, "GB") + size(ref_fasta_dict, "GB") + size(ref_fasta_fai, "GB"))
+    Int read_count_pon_size = ceil(size(read_count_pon, "GB"))
+    Int tumor_bam_size = ceil(size(tumor_bam, "GB") + size(tumor_bam_idx, "GB"))
+    Int normal_bam_size = ceil(size(normal_bam, "GB") + size(normal_bam_idx, "GB"))
+
+    # Use as a last resort to increase the disk given to every task in case of ill behaving data
+    Int? emergency_extra_disk
+
+    Int gatk4_override_size = if defined(gatk4_jar_override) then ceil(size(gatk4_jar_override, "GB")) else 0
+    # This is added to every task as padding, should increase if systematically you need more disk for every call
+    Int disk_pad = 20 + ceil(size(intervals, "GB")) + ceil(size(common_sites, "GB")) + gatk4_override_size + select_first([emergency_extra_disk,0])
+
+    Int process_disk = ref_size + disk_pad
     call CNVTasks.PreprocessIntervals {
         input:
             intervals = intervals,
             ref_fasta_dict = ref_fasta_dict,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = process_disk
     }
 
+    Int collect_counts_tumor_disk = tumor_bam_size + ceil(size(PreprocessIntervals.preprocessed_intervals, "GB")) + disk_pad
     call CNVTasks.CollectCounts as CollectCountsTumor {
         input:
             intervals = PreprocessIntervals.preprocessed_intervals,
             bam = tumor_bam,
             bam_idx = tumor_bam_idx,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = collect_counts_tumor_disk
     }
 
+    Int collect_counts_normal_disk = normal_bam_size + ceil(size(PreprocessIntervals.preprocessed_intervals, "GB")) + disk_pad
     call CNVTasks.CollectCounts as CollectCountsNormal {
         input:
             intervals = PreprocessIntervals.preprocessed_intervals,
             bam = normal_bam,
             bam_idx = normal_bam_idx,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = collect_counts_normal_disk
     }
 
+    Int collect_allelic_counts_tumor_disk = tumor_bam_size + ref_size + disk_pad
     call CNVTasks.CollectAllelicCounts as CollectAllelicCountsTumor {
         input:
             common_sites = common_sites,
@@ -70,9 +89,11 @@ workflow CNVSomaticPairWorkflow {
             ref_fasta_dict = ref_fasta_dict,
             ref_fasta_fai = ref_fasta_fai,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = collect_allelic_counts_tumor_disk
     }
 
+    Int collect_allelic_counts_normal_disk = normal_bam_size + ref_size + disk_pad
     call CNVTasks.CollectAllelicCounts as CollectAllelicCountsNormal {
         input:
             common_sites = common_sites,
@@ -82,27 +103,33 @@ workflow CNVSomaticPairWorkflow {
             ref_fasta_dict = ref_fasta_dict,
             ref_fasta_fai = ref_fasta_fai,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = collect_allelic_counts_normal_disk
     }
 
+    Int denoise_read_counts_tumor_disk = read_count_pon_size + ceil(size(CollectCountsTumor.counts, "GB")) + disk_pad
     call DenoiseReadCounts as DenoiseReadCountsTumor {
         input:
             entity_id = CollectCountsTumor.entity_id,
             read_counts = CollectCountsTumor.counts,
             read_count_pon = read_count_pon,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = denoise_read_counts_tumor_disk
     }
 
+    Int denoise_read_counts_normal_disk = read_count_pon_size + ceil(size(CollectCountsNormal.counts, "GB")) + disk_pad
     call DenoiseReadCounts as DenoiseReadCountsNormal {
         input:
             entity_id = CollectCountsNormal.entity_id,
             read_counts = CollectCountsNormal.counts,
             read_count_pon = read_count_pon,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = denoise_read_counts_normal_disk
     }
 
+    Int  model_segments_disk = ceil(size(DenoiseReadCountsTumor.denoised_copy_ratios, "GB")) + ceil(size(CollectAllelicCountsTumor.allelic_counts, "GB")) + ceil(size(CollectAllelicCountsNormal.allelic_counts, "GB")) + disk_pad
     call ModelSegments as ModelSegmentsTumor {
         input:
             entity_id = CollectCountsTumor.entity_id,
@@ -110,7 +137,8 @@ workflow CNVSomaticPairWorkflow {
             allelic_counts = CollectAllelicCountsTumor.allelic_counts,
             normal_allelic_counts = CollectAllelicCountsNormal.allelic_counts,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = model_segments_disk
     }
 
     call ModelSegments as ModelSegmentsNormal {
@@ -119,27 +147,34 @@ workflow CNVSomaticPairWorkflow {
             denoised_copy_ratios = DenoiseReadCountsNormal.denoised_copy_ratios,
             allelic_counts = CollectAllelicCountsNormal.allelic_counts,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = model_segments_disk
     }
 
+    Int copy_ratio_segments_tumor_disk = ceil(size(DenoiseReadCountsTumor.denoised_copy_ratios, "GB")) + ceil(size(ModelSegmentsTumor.copy_ratio_only_segments, "GB")) + disk_pad
     call CallCopyRatioSegments as CallCopyRatioSegmentsTumor {
         input:
             entity_id = CollectCountsTumor.entity_id,
             denoised_copy_ratios = DenoiseReadCountsTumor.denoised_copy_ratios,
             copy_ratio_segments = ModelSegmentsTumor.copy_ratio_only_segments,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = copy_ratio_segments_tumor_disk
     }
 
+    Int copy_ratio_segments_normal_disk = ceil(size(DenoiseReadCountsNormal.denoised_copy_ratios, "GB")) + ceil(size(ModelSegmentsNormal.copy_ratio_only_segments, "GB")) + disk_pad
     call CallCopyRatioSegments as CallCopyRatioSegmentsNormal {
         input:
             entity_id = CollectCountsNormal.entity_id,
             denoised_copy_ratios = DenoiseReadCountsNormal.denoised_copy_ratios,
             copy_ratio_segments = ModelSegmentsNormal.copy_ratio_only_segments,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = copy_ratio_segments_normal_disk
     }
 
+    # The F=files from other tasks are small enough to just combine into one disk variable and pass to the tumor plotting tasks
+    Int plot_tumor_disk = ref_size + ceil(size(DenoiseReadCountsTumor.standardized_copy_ratios, "GB")) + ceil(size(DenoiseReadCountsTumor.denoised_copy_ratios, "GB")) + ceil(size(ModelSegmentsTumor.het_allelic_counts, "GB")) + ceil(size(ModelSegmentsTumor.modeled_segments, "GB")) + disk_pad
     call PlotDenoisedCopyRatios as PlotDenoisedCopyRatiosTumor {
         input:
             entity_id = CollectCountsTumor.entity_id,
@@ -147,9 +182,11 @@ workflow CNVSomaticPairWorkflow {
             denoised_copy_ratios = DenoiseReadCountsTumor.denoised_copy_ratios,
             ref_fasta_dict = ref_fasta_dict,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = plot_tumor_disk
     }
-
+    # The files from other tasks are small enough to just combine into one disk variable and pass to the normal plotting tasks
+    Int plot_normal_disk = ref_size + ceil(size(DenoiseReadCountsNormal.standardized_copy_ratios, "GB")) + ceil(size(DenoiseReadCountsNormal.denoised_copy_ratios, "GB")) + ceil(size(ModelSegmentsNormal.het_allelic_counts, "GB")) + ceil(size(ModelSegmentsNormal.modeled_segments, "GB")) + disk_pad
     call PlotDenoisedCopyRatios as PlotDenoisedCopyRatiosNormal {
         input:
             entity_id = CollectCountsNormal.entity_id,
@@ -157,7 +194,8 @@ workflow CNVSomaticPairWorkflow {
             denoised_copy_ratios = DenoiseReadCountsNormal.denoised_copy_ratios,
             ref_fasta_dict = ref_fasta_dict,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = plot_normal_disk
     }
 
     call PlotModeledSegments as PlotModeledSegmentsTumor {
@@ -168,7 +206,8 @@ workflow CNVSomaticPairWorkflow {
             modeled_segments = ModelSegmentsTumor.modeled_segments,
             ref_fasta_dict = ref_fasta_dict,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = plot_tumor_disk
     }
 
     call PlotModeledSegments as PlotModeledSegmentsNormal {
@@ -179,7 +218,8 @@ workflow CNVSomaticPairWorkflow {
             modeled_segments = ModelSegmentsNormal.modeled_segments,
             ref_fasta_dict = ref_fasta_dict,
             gatk4_jar_override = gatk4_jar_override,
-            gatk_docker = gatk_docker
+            gatk_docker = gatk_docker,
+            disk_space_gb = plot_normal_disk
     }
 }
 
@@ -194,13 +234,17 @@ task DenoiseReadCounts {
     Int? mem
     String gatk_docker
     Int? preemptible_attempts
-    Int? disk_space_gb
+    Int disk_space_gb
+
+    # Mem is in units of GB but our command and memory runtime values are in MB
+    Int machine_mem = if defined(mem) then mem * 1000 else 13000
+    Int command_mem = machine_mem - 1000
 
     command {
         set -e
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        java -Xmx${default="4" mem}g -jar $GATK_JAR DenoiseReadCounts \
+        java -Xmx${command_mem}m -jar $GATK_JAR DenoiseReadCounts \
             --input ${read_counts} \
             --readCountPanelOfNormals ${read_count_pon} \
             ${"--numberOfEigensamples " + number_of_eigensamples} \
@@ -210,9 +254,9 @@ task DenoiseReadCounts {
 
     runtime {
         docker: "${gatk_docker}"
-        memory: select_first([mem, 5]) + " GB"
-        disks: "local-disk " + select_first([disk_space_gb, ceil(size(read_count_pon, "GB")) + 50]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        memory: machine_mem + " MB"
+        disks: "local-disk " + disk_space_gb + " HDD"
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -252,7 +296,12 @@ task ModelSegments {
     Int? mem
     String gatk_docker
     Int? preemptible_attempts
-    Int? disk_space_gb
+    Int disk_space_gb
+
+    # Mem is in units of GB but our command and memory runtime values are in MB
+    Int machine_mem = if defined(mem) then mem * 1000 else 13000
+    # ModelSegments seems to need at least 3GB of overhead to run
+    Int command_mem = machine_mem - 3000
 
     # If optional output_dir not specified, use "out"
     String output_dir_ = select_first([output_dir, "out"])
@@ -262,7 +311,7 @@ task ModelSegments {
         mkdir ${output_dir_}
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        java -Xmx${default="10" mem}g -jar $GATK_JAR ModelSegments \
+        java -Xmx${command_mem}m -jar $GATK_JAR ModelSegments \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             --allelicCounts ${allelic_counts} \
             ${"--normalAllelicCounts " + normal_allelic_counts} \
@@ -288,14 +337,16 @@ task ModelSegments {
             --output ${output_dir_} \
             --outputPrefix ${entity_id}
 
+        # We need to created the file even if the above command doesn't so we have something to delocalize
+        # If no file is created by the above task then it will copy out an empty file
         touch ${output_dir_}/${entity_id}.hets.normal.tsv
     }
 
     runtime {
         docker: "${gatk_docker}"
-        memory: select_first([mem, 16]) + " GB"
-        disks: "local-disk " + select_first([disk_space_gb, 100]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        memory: machine_mem + " MB"
+        disks: "local-disk " + disk_space_gb + " HDD"
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -321,13 +372,17 @@ task CallCopyRatioSegments {
     Int? mem
     String gatk_docker
     Int? preemptible_attempts
-    Int? disk_space_gb
+    Int disk_space_gb
+
+    # Mem is in units of GB but our command and memory runtime values are in MB
+    Int machine_mem = if defined(mem) then mem * 1000 else 7000
+    Int command_mem = machine_mem - 1000
 
     command {
         set -e
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        java -Xmx${default="8" mem}g -jar $GATK_JAR CallCopyRatioSegments \
+        java -Xmx${command_mem}m -jar $GATK_JAR CallCopyRatioSegments \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             --segments ${copy_ratio_segments} \
             --output ${entity_id}.called.seg
@@ -335,9 +390,9 @@ task CallCopyRatioSegments {
 
     runtime {
         docker: "${gatk_docker}"
-        memory: select_first([mem, 12]) + " GB"
-        disks: "local-disk " + select_first([disk_space_gb, 100]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        memory: machine_mem + " MB"
+        disks: "local-disk " + disk_space_gb + " HDD"
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -358,7 +413,11 @@ task PlotDenoisedCopyRatios {
     Int? mem
     String gatk_docker
     Int? preemptible_attempts
-    Int? disk_space_gb
+    Int disk_space_gb
+
+    # Mem is in units of GB but our command and memory runtime values are in MB
+    Int machine_mem = if defined(mem) then mem * 1000 else 7000
+    Int command_mem = machine_mem - 1000
 
     # If optional output_dir not specified, use "out"
     String output_dir_ = select_first([output_dir, "out"])
@@ -368,7 +427,7 @@ task PlotDenoisedCopyRatios {
         mkdir ${output_dir_}
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        java -Xmx${default="4" mem}g -jar $GATK_JAR PlotDenoisedCopyRatios \
+        java -Xmx${command_mem}m -jar $GATK_JAR PlotDenoisedCopyRatios \
             --standardizedCopyRatios ${standardized_copy_ratios} \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             -SD ${ref_fasta_dict} \
@@ -379,9 +438,9 @@ task PlotDenoisedCopyRatios {
 
     runtime {
         docker: "${gatk_docker}"
-        memory: select_first([mem, 5]) + " GB"
-        disks: "local-disk " + select_first([disk_space_gb, 100]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        memory: machine_mem + " MB"
+        disks: "local-disk " + disk_space_gb + " HDD"
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -408,7 +467,11 @@ task PlotModeledSegments {
     Int? mem
     String gatk_docker
     Int? preemptible_attempts
-    Int? disk_space_gb
+    Int disk_space_gb
+
+    # Mem is in units of GB but our command and memory runtime values are in MB
+    Int machine_mem = if defined(mem) then mem * 1000 else 7000
+    Int command_mem = machine_mem - 1000
 
     # If optional output_dir not specified, use "out"
     String output_dir_ = select_first([output_dir, "out"])
@@ -418,7 +481,7 @@ task PlotModeledSegments {
         mkdir ${output_dir_}
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        java -Xmx${default="4" mem}g -jar $GATK_JAR PlotModeledSegments \
+        java -Xmx${command_mem}m -jar $GATK_JAR PlotModeledSegments \
             --denoisedCopyRatios ${denoised_copy_ratios} \
             --allelicCounts ${het_allelic_counts} \
             --segments ${modeled_segments} \
@@ -430,9 +493,9 @@ task PlotModeledSegments {
 
     runtime {
         docker: "${gatk_docker}"
-        memory: select_first([mem, 5]) + " GB"
-        disks: "local-disk " + select_first([disk_space_gb, 100]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        memory: machine_mem + " MB"
+        disks: "local-disk " + disk_space_gb + " HDD"
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {

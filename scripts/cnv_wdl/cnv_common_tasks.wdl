@@ -34,7 +34,7 @@ task PadTargets {
         docker: "${gatk_docker}"
         memory: select_first([mem, 2]) + " GB"
         disks: "local-disk " + select_first([disk_space_gb, 40]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -76,7 +76,7 @@ task PreprocessIntervals {
         docker: "${gatk_docker}"
         memory: select_first([mem, 2]) + " GB"
         disks: "local-disk " + select_first([disk_space_gb, 40]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -114,7 +114,7 @@ task AnnotateTargets {
         docker: "${gatk_docker}"
         memory: select_first([mem, 5]) + " GB"
         disks: "local-disk " + select_first([disk_space_gb, ceil(size(ref_fasta, "GB")) + 50]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -150,7 +150,7 @@ task AnnotateIntervals {
         docker: "${gatk_docker}"
         memory: select_first([mem, 5]) + " GB"
         disks: "local-disk " + select_first([disk_space_gb, ceil(size(ref_fasta, "GB")) + 50]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -228,7 +228,7 @@ task CollectReadCounts {
         docker: "${gatk_docker}"
         memory: select_first([mem, 5]) + " GB"
         disks: "local-disk " + select_first([disk_space_gb, ceil(size(bam, "GB")) + 50]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -273,7 +273,7 @@ task CollectCounts {
         docker: "${gatk_docker}"
         memory: select_first([mem, 8]) + " GB"
         disks: "local-disk " + select_first([disk_space_gb, ceil(size(bam, "GB")) + 50]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -299,6 +299,10 @@ task CollectAllelicCounts {
     Int? preemptible_attempts
     Int? disk_space_gb
 
+    # Mem is in units of GB but our command and memory runtime values are in MB
+    Int machine_mem = if defined(mem) then mem * 1000 else 13000
+    Int command_mem = machine_mem - 1000
+
     # Sample name is derived from the bam filename
     String base_filename = basename(bam, ".bam")
 
@@ -308,7 +312,7 @@ task CollectAllelicCounts {
         set -e
         GATK_JAR=${default="/root/gatk.jar" gatk4_jar_override}
 
-        java -Xmx${default="8" mem}g -jar $GATK_JAR CollectAllelicCounts \
+        java -Xmx${command_mem}m -jar $GATK_JAR CollectAllelicCounts \
             -L ${common_sites} \
             --input ${bam} \
             --reference ${ref_fasta} \
@@ -318,9 +322,9 @@ task CollectAllelicCounts {
 
     runtime {
         docker: "${gatk_docker}"
-        memory: select_first([mem, 5]) + " GB"
+        memory: machine_mem + " MB"
         disks: "local-disk " + select_first([disk_space_gb, ceil(size(bam, "GB")) + 50]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
@@ -356,7 +360,7 @@ task CorrectGCBias {
         docker: "${gatk_docker}"
         memory: select_first([mem, 5]) + " GB"
         disks: "local-disk " + select_first([disk_space_gb, ceil(size(coverage, "GB"))+50]) + " HDD"
-        preemptible: select_first([preemptible_attempts, 2])
+        preemptible: select_first([preemptible_attempts, 5])
     }
 
     output {
