@@ -75,6 +75,14 @@ public class Mutect2FilteringEngine {
         }
     }
 
+private void applyDiscordantMatesFilter(final VariantContext vc, final VariantContextBuilder vcb) {
+        if (vc.hasAttribute("P_VAL_OA_TAG")) {
+            if (vc.getAttributeAsDouble("P_VAL_OA_TAG", 1) < .05) {
+                vcb.filter("DISCORDANT_MATES_FILTER");
+            }
+        }
+    }
+
     private void applySTRFilter(final VariantContext vc, final FilterResult filterResult) {
         // STR contractions, such as ACTACTACT -> ACTACT, are overwhelmingly false positives so we hard filter by default
         if (vc.isIndel()) {
@@ -232,6 +240,7 @@ public class Mutect2FilteringEngine {
         // the above filter misses artifacts whose support in the normal consists entirely of low base quality reads
         // Since a lot of low-BQ reads is itself evidence of an artifact, we filter these by hand via an estimated LOD
         // that uses the average base quality of *ref* reads in the normal
+
         final int normalMedianRefBaseQuality = GATKProtectedVariantContextUtils.getAttributeAsIntArray(
                 normalGenotype, BaseQuality.KEY, () -> new int[] {IMPUTED_NORMAL_BASE_QUALITY}, IMPUTED_NORMAL_BASE_QUALITY)[0];
         final double normalPValue = 1 - new BinomialDistribution(null, normalDepth, QualityUtils.qualToErrorProb(normalMedianRefBaseQuality))
@@ -333,6 +342,7 @@ public class Mutect2FilteringEngine {
         applyClusteredEventFilter(vc, filterResult);
         applyDuplicatedAltReadFilter(MTFAC, vc, filterResult);
         applyTriallelicFilter(vc, filterResult);
+	applyDiscordantMatesFilter(vc, filterResult);
         applyPanelOfNormalsFilter(MTFAC, vc, filterResult);
         applyGermlineVariantFilter(MTFAC, vc, filterResult);
         applyArtifactInNormalFilter(MTFAC, vc, filterResult);
