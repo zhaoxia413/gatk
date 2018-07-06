@@ -193,14 +193,38 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         final File normalBam = new File(DREAM_BAMS_DIR, "normal.bam");
         final String normalName = "synthetic.challenge.set1.normal";
 
+        /*final String[] args = {
+                "-I", "/Users/mshand/Downloads/Debug/output.bam",
+                "-" + M2ArgumentCollection.TUMOR_SAMPLE_SHORT_NAME, "mixture",
+                "-R", "/Users/mshand/Downloads/Debug/Homo_sapiens_assembly38.mt_only.fasta",
+                "-O", outputVcf.getAbsolutePath(),
+                "-L", "chrM:2351-2485",
+                "--max-reads-per-alignment-start", "0",
+                "-default-af", "0",
+                "--initial-tumor-lod", "-20",
+                "--tumor-lod-to-emit", "0",
+                "--min-pruning", "8",
+               // "--assembly-region-out", "/Users/mshand/Downloads/Debug/assembly_regions.txt",
+               // "--genotyping-mode", "GENOTYPE_GIVEN_ALLELES",
+               // "--alleles", "/Users/mshand/Downloads/Debug/fn.vcf",
+                "--debug"
+        };*/
+
         final String[] args = {
-                "-I", tumorBam.getAbsolutePath(),
-                "-" + M2ArgumentCollection.TUMOR_SAMPLE_SHORT_NAME, tumorName,
-                "-I", normalBam.getAbsolutePath(),
-                "-" + M2ArgumentCollection.NORMAL_SAMPLE_SHORT_NAME, normalName,
-                "-R", b37_reference_20_21,
-                "-L", "20:10000000-10100000", // this is 1/3 of the chr 20 interval of our mini-dbSNP
-                "-O", outputVcf.getAbsolutePath()
+                "-I", "/Users/mshand/Downloads/Debug/mix_2_post_BQSR_and_pruning/output.bam",
+                "-" + M2ArgumentCollection.TUMOR_SAMPLE_SHORT_NAME, "mixture",
+                "-R", "/Users/mshand/Downloads/Debug/Homo_sapiens_assembly38.mt_only.fasta",
+                "-O", outputVcf.getAbsolutePath(),
+                "-L", "chrM:1690-1700",
+                "--max-reads-per-alignment-start", "0",
+                "-default-af", "0",
+                "--initial-tumor-lod", "0",
+                "--tumor-lod-to-emit", "0",
+                "--min-pruning", "4",
+                //"--assembly-region-out", "/Users/mshand/Downloads/Debug/assembly_regions.txt",
+                //"--genotyping-mode", "GENOTYPE_GIVEN_ALLELES",
+                //"--alleles", "/Users/mshand/Downloads/Debug/mix_2_post_BQSR_and_pruning/fn.vcf",
+                "--debug"
         };
 
         runCommandLine(args);
