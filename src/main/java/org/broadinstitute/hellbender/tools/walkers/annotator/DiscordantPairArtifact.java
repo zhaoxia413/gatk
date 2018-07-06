@@ -36,7 +36,7 @@ public class DiscordantPairArtifact extends GenotypeAnnotation implements Standa
         final Allele altAlelle = vc.getAlternateAllele(indexOfMaxTumorLod);
         final Allele refAllele = vc.getReference();
 
-        Collection<ReadLikelihoods<Allele>.BestAllele> bestAlleles = likelihoods.bestAlleles(g.getSampleName());
+        Collection<ReadLikelihoods<Allele>.BestAllele> bestAlleles = likelihoods.bestAllelesBreakingTies(g.getSampleName());
 
         int discordantAlt = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative() && ba.allele.equals(altAlelle)).count();
         int discordantRef = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative() && ba.allele.equals(refAllele)).count();
