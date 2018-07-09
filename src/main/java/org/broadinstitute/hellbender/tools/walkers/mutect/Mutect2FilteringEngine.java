@@ -80,7 +80,7 @@ public class Mutect2FilteringEngine {
     private void applyDiscordantMatesFilter(final VariantContext vc, final VariantContextBuilder vcb) {
         Genotype tumorGenotype = vc.getGenotype(tumorSample);
         if (tumorGenotype.hasAnyAttribute("P_VAL_OA_TAG")) {
-            if (Double.parseDouble((String) tumorGenotype.getAnyAttribute("P_VAL_OA_TAG")) < .05) {
+            if (Double.parseDouble((String) tumorGenotype.getAnyAttribute("P_VAL_OA_TAG")) > 30) {
                 vcb.filter(GATKVCFConstants.DISCORDANT_MATES_NAME);
             }
         }

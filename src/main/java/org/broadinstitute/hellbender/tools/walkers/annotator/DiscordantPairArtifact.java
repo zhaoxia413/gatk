@@ -51,12 +51,12 @@ public class DiscordantPairArtifact extends GenotypeAnnotation implements Standa
 
         double pVal = FisherExactTest.twoSidedPValue(contingencyTable);
 
-        gb.attribute(P_VAL_OA_TAG, pVal);
+        gb.attribute(P_VAL_OA_TAG, discordantAlt);
     }
 
     @Override
     public List<VCFFormatHeaderLine> getDescriptions() {
-        return Arrays.asList(new VCFFormatHeaderLine(P_VAL_OA_TAG, 1, VCFHeaderLineType.Float, "p-value of fisher exact test on OA tag"));
+        return Arrays.asList(new VCFFormatHeaderLine(P_VAL_OA_TAG, 1, VCFHeaderLineType.Integer, "number of OA tag alt reads"));
 
     }
 
