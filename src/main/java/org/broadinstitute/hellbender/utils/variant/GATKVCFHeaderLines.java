@@ -4,6 +4,7 @@ import htsjdk.variant.vcf.*;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static org.broadinstitute.hellbender.utils.variant.GATKVCFConstants.*;
 
@@ -61,6 +62,7 @@ public class GATKVCFHeaderLines {
         addFilterLine(new VCFFilterHeaderLine(DUPLICATED_EVIDENCE_FILTER_NAME, "evidence for alt allele is overrepresented by apparent duplicates"));
         addFilterLine(new VCFFilterHeaderLine(READ_ORIENTATION_ARTIFACT_FILTER_NAME, "orientation bias detected by the orientation bias mixture model"));
         addFilterLine(new VCFFilterHeaderLine(BAD_HAPLOTYPE_FILTER_NAME, "Variant near filtered variant on same haplotype."));
+	addFilterLine(new VCFFilterHeaderLine(DISCORDANT_MATES_NAME, "discordant mates fisher exact test"));
 
 
         addFormatLine(new VCFFormatHeaderLine(ALLELE_BALANCE_KEY, 1, VCFHeaderLineType.Float, "Allele balance for each het genotype"));

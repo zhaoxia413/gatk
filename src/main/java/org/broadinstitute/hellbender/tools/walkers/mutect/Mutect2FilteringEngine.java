@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.tools.walkers.mutect;
 import htsjdk.samtools.util.OverlapDetector;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.VariantContext;
+import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
 import org.apache.commons.math3.distribution.BinomialDistribution;
 import org.broadinstitute.hellbender.tools.walkers.annotator.*;
@@ -34,6 +35,7 @@ public class Mutect2FilteringEngine {
         this.tumorSample = tumorSample;
         this.normalSample = normalSample;
         somaticPriorProb = Math.pow(10, MTFAC.log10PriorProbOfSomaticEvent);
+
         final List<MinorAlleleFractionRecord> tumorMinorAlleleFractionRecords = MTFAC.tumorSegmentationTable == null ?
                 Collections.emptyList() : MinorAlleleFractionRecord.readFromFile(MTFAC.tumorSegmentationTable);
         tumorSegments = OverlapDetector.create(tumorMinorAlleleFractionRecords);
@@ -75,10 +77,11 @@ public class Mutect2FilteringEngine {
         }
     }
 
-private void applyDiscordantMatesFilter(final VariantContext vc, final VariantContextBuilder vcb) {
-        if (vc.hasAttribute("P_VAL_OA_TAG")) {
-            if (vc.getAttributeAsDouble("P_VAL_OA_TAG", 1) < .05) {
-                vcb.filter("DISCORDANT_MATES_FILTER");
+    private void applyDiscordantMatesFilter(final VariantContext vc, final VariantContextBuilder vcb) {
+        Genotype tumorGenotype = vc.getGenotype(tumorSample);
+        if (tumorGenotype.hasAnyAttribute("P_VAL_OA_TAG")) {
+            if (Double.parseDouble((String) tumorGenotype.getAnyAttribute("P_VAL_OA_TAG")) < .05) {
+                vcb.filter(GATKVCFConstants.DISCORDANT_MATES_NAME);
             }
         }
     }
