@@ -63,6 +63,7 @@ public class GATKVCFHeaderLines {
         addFilterLine(new VCFFilterHeaderLine(READ_ORIENTATION_ARTIFACT_FILTER_NAME, "orientation bias detected by the orientation bias mixture model"));
         addFilterLine(new VCFFilterHeaderLine(BAD_HAPLOTYPE_FILTER_NAME, "Variant near filtered variant on same haplotype."));
 	addFilterLine(new VCFFilterHeaderLine(DISCORDANT_MATES_NAME, "discordant mates fisher exact test"));
+        addFilterLine(new VCFFilterHeaderLine(LOW_ALLELE_FRACTION_NAME, "low allele fraction"));
 
 
         addFormatLine(new VCFFormatHeaderLine(ALLELE_BALANCE_KEY, 1, VCFHeaderLineType.Float, "Allele balance for each het genotype"));

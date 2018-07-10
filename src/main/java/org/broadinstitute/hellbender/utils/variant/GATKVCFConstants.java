@@ -161,6 +161,7 @@ public final class GATKVCFConstants {
     public final static String READ_ORIENTATION_ARTIFACT_FILTER_NAME =          "read_orientation_artifact";
     public final static String BAD_HAPLOTYPE_FILTER_NAME =          "bad_haplotype";
     public final static String DISCORDANT_MATES_NAME =                          "discordant_mates";
+    public final static String LOW_ALLELE_FRACTION_NAME =                       "low_allele_fraction";
 
     public static final List<String> MUTECT_FILTER_NAMES = Arrays.asList(STR_CONTRACTION_FILTER_NAME,
             PON_FILTER_NAME, CLUSTERED_EVENTS_FILTER_NAME, TUMOR_LOD_FILTER_NAME, GERMLINE_RISK_FILTER_NAME,
@@ -168,7 +169,7 @@ public final class GATKVCFConstants {
             MEDIAN_BASE_QUALITY_FILTER_NAME, MEDIAN_MAPPING_QUALITY_FILTER_NAME,
             MEDIAN_FRAGMENT_LENGTH_DIFFERENCE_FILTER_NAME,
             READ_POSITION_FILTER_NAME, CONTAMINATION_FILTER_NAME, DUPLICATED_EVIDENCE_FILTER_NAME,
-            READ_ORIENTATION_ARTIFACT_FILTER_NAME, BAD_HAPLOTYPE_FILTER_NAME, DISCORDANT_MATES_NAME);
+            READ_ORIENTATION_ARTIFACT_FILTER_NAME, BAD_HAPLOTYPE_FILTER_NAME, DISCORDANT_MATES_NAME, LOW_ALLELE_FRACTION_NAME);
 
     // Symbolic alleles
     public final static String SYMBOLIC_ALLELE_DEFINITION_HEADER_TAG = "ALT";
