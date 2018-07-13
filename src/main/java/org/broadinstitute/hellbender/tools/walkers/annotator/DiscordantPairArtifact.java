@@ -43,6 +43,15 @@ public class DiscordantPairArtifact extends GenotypeAnnotation implements Standa
         int concordantAlt = (int) bestAlleles.stream().filter(ba -> !ba.read.hasAttribute("OA") && ba.isInformative() && ba.allele.equals(altAlelle)).count();
         int concordantRef = (int) bestAlleles.stream().filter(ba -> !ba.read.hasAttribute("OA") && ba.isInformative() && ba.allele.equals(refAllele)).count();
 
+        int nonChrMAlt = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative() &&
+                ba.allele.equals(altAlelle) && !ba.read.getAttributeAsString("OA").split(",")[0].equals("chrM")).count();
+        int nonChrMRef = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative() &&
+                ba.allele.equals(refAllele) && !ba.read.getAttributeAsString("OA").split(",")[0].equals("chrM")).count();
+
+        final int[] nonChrMCounts = new int[2];
+        nonChrMCounts[0] = nonChrMRef;
+        nonChrMCounts[1] = nonChrMAlt;
+
         final int[][] contingencyTable = new int[2][2];
         contingencyTable[0][0] = discordantRef;
         contingencyTable[0][1] = concordantRef;
@@ -51,7 +60,7 @@ public class DiscordantPairArtifact extends GenotypeAnnotation implements Standa
 
         double pVal = FisherExactTest.twoSidedPValue(contingencyTable);
 
-        gb.attribute(P_VAL_OA_TAG, discordantAlt);
+        gb.attribute(P_VAL_OA_TAG, nonChrMCounts);
     }
 
     @Override
