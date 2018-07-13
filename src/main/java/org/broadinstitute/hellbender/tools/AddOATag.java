@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools;
 
 import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.ReadWalker;
@@ -8,7 +9,13 @@ import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
+import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
+@CommandLineProgramProperties(
+        summary = "Adds OA and XO (original alignment and mate original alignment) tags",
+        oneLineSummary = "Adds OA and XO tag",
+        programGroup = ReadDataManipulationProgramGroup.class
+)
 public class AddOATag extends ReadWalker {
 
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
