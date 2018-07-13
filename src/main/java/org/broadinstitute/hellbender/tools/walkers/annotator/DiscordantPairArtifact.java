@@ -18,7 +18,8 @@ import java.util.List;
 
 public class DiscordantPairArtifact extends GenotypeAnnotation implements StandardMutectAnnotation{
 
-    public static final String P_VAL_OA_TAG = "P_VAL_OA_TAG";
+    public static final String NON_MT_OA = "NON_MT_OA";
+    public static final String DISCORDANT_PAIRS = "DISC_PAIRS";
 
     @Override
     public void annotate(ReferenceContext ref, VariantContext vc, Genotype g, GenotypeBuilder gb, ReadLikelihoods<Allele> likelihoods) {
@@ -38,10 +39,8 @@ public class DiscordantPairArtifact extends GenotypeAnnotation implements Standa
 
         Collection<ReadLikelihoods<Allele>.BestAllele> bestAlleles = likelihoods.bestAllelesBreakingTies(g.getSampleName());
 
-        int discordantAlt = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative() && ba.allele.equals(altAlelle)).count();
-        int discordantRef = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative() && ba.allele.equals(refAllele)).count();
-        int concordantAlt = (int) bestAlleles.stream().filter(ba -> !ba.read.hasAttribute("OA") && ba.isInformative() && ba.allele.equals(altAlelle)).count();
-        int concordantRef = (int) bestAlleles.stream().filter(ba -> !ba.read.hasAttribute("OA") && ba.isInformative() && ba.allele.equals(refAllele)).count();
+        int discordantAlt = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative()
+                && ba.allele.equals(altAlelle) && !ba.read.getAttributeAsString("OA").equals(ba.read.getAttributeAsString("XO"))).count();
 
         int nonChrMAlt = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative() &&
                 ba.allele.equals(altAlelle) && !ba.read.getAttributeAsString("OA").split(",")[0].equals("chrM")).count();
@@ -52,25 +51,18 @@ public class DiscordantPairArtifact extends GenotypeAnnotation implements Standa
         nonChrMCounts[0] = nonChrMRef;
         nonChrMCounts[1] = nonChrMAlt;
 
-        final int[][] contingencyTable = new int[2][2];
-        contingencyTable[0][0] = discordantRef;
-        contingencyTable[0][1] = concordantRef;
-        contingencyTable[1][0] = discordantAlt;
-        contingencyTable[1][1] = concordantAlt;
-
-        double pVal = FisherExactTest.twoSidedPValue(contingencyTable);
-
-        gb.attribute(P_VAL_OA_TAG, nonChrMCounts);
+        gb.attribute(NON_MT_OA, nonChrMCounts);
+        gb.attribute(DISCORDANT_PAIRS, discordantAlt);
     }
 
     @Override
     public List<VCFFormatHeaderLine> getDescriptions() {
-        return Arrays.asList(new VCFFormatHeaderLine(P_VAL_OA_TAG, 1, VCFHeaderLineType.Integer, "number of OA tag alt reads"));
+        return Arrays.asList(new VCFFormatHeaderLine(NON_MT_OA, 1, VCFHeaderLineType.Integer, "number of OA tag alt reads"));
 
     }
 
     @Override
     public List<String> getKeyNames() {
-        return Arrays.asList(P_VAL_OA_TAG);
+        return Arrays.asList(NON_MT_OA);
     }
 }
