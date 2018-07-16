@@ -80,8 +80,8 @@ public class Mutect2FilteringEngine {
 
     private void applyDiscordantMatesFilter(final VariantContext vc, final VariantContextBuilder vcb) {
         Genotype tumorGenotype = vc.getGenotype(tumorSample);
-        if (tumorGenotype.hasAnyAttribute("P_VAL_OA_TAG")) {
-            if (Double.parseDouble((String) tumorGenotype.getAnyAttribute("P_VAL_OA_TAG")) > 30) {
+        if (tumorGenotype.hasAnyAttribute("NON_MT_OA")) {
+            if (Double.parseDouble((String) tumorGenotype.getAnyAttribute("NON_MT_OA")) > 30) {
                 vcb.filter(GATKVCFConstants.DISCORDANT_MATES_NAME);
             }
         }
@@ -98,11 +98,13 @@ private void applyAFFilter(final VariantContext vc, final VariantContextBuilder 
     }
 
     private void applyTLODDFilter(final VariantContext vc, final VariantContextBuilder vcb) {
-        Double TLOD = vc.getAttributeAsDouble("TLOD", 1);
-        Double depth = vc.getAttributeAsDouble("DP", 1);
-        Double TLODD = TLOD/depth;
-        if (TLODD < .005) {
-            vcb.filter(GATKVCFConstants.LOW_TLODD_NAME);
+        if(vc.isBiallelic()) {
+            Double TLOD = vc.getAttributeAsDouble("TLOD", 1);
+            Double depth = vc.getAttributeAsDouble("DP", 1);
+            Double TLODD = TLOD / depth;
+            if (TLODD < .005) {
+                vcb.filter(GATKVCFConstants.LOW_TLODD_NAME);
+            }
         }
     }
 

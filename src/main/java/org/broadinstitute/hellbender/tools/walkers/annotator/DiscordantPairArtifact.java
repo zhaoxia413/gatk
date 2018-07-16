@@ -57,8 +57,8 @@ public class DiscordantPairArtifact extends GenotypeAnnotation implements Standa
 
     @Override
     public List<VCFFormatHeaderLine> getDescriptions() {
-        return Arrays.asList(new VCFFormatHeaderLine(NON_MT_OA, 1, VCFHeaderLineType.Integer, "number of OA tag alt reads"));
-
+        return Arrays.asList(new VCFFormatHeaderLine(NON_MT_OA, 2, VCFHeaderLineType.Integer, "number of non MT ref reads and number of non MT alt reads"),
+            new VCFFormatHeaderLine(DISCORDANT_PAIRS, 1, VCFHeaderLineType.Integer, "number of discordant pairs in alt"));
     }
 
     @Override
