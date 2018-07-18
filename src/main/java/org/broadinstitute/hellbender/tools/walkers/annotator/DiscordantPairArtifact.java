@@ -39,8 +39,8 @@ public class DiscordantPairArtifact extends GenotypeAnnotation implements Standa
 
         Collection<ReadLikelihoods<Allele>.BestAllele> bestAlleles = likelihoods.bestAllelesBreakingTies(g.getSampleName());
 
-        int discordantAlt = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative()
-                && ba.allele.equals(altAlelle)
+        int discordantAlt = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.read.hasAttribute("XO")
+                && ba.isInformative() && ba.allele.equals(altAlelle)
                 && !ba.read.getAttributeAsString("OA").split(",")[0].equals(ba.read.getAttributeAsString("XO").split(",")[0])).count();
 
         int nonChrMAlt = (int) bestAlleles.stream().filter(ba -> ba.read.hasAttribute("OA") && ba.isInformative() &&
