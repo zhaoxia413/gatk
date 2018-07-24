@@ -305,33 +305,6 @@ public class SplitMultiAllelicSites extends VariantWalker {
         switch ( assignmentMethod ) {
             case DO_NOT_ASSIGN_GENOTYPES:
                 break;
-            case SET_TO_NO_CALL:
-                gb.alleles(noCallAlleles(ploidy));
-                gb.noGQ();
-                break;
-            case SET_TO_NO_CALL_NO_ANNOTATIONS:
-                gb.alleles(noCallAlleles(ploidy));
-                gb.noGQ();
-                gb.noAD();
-                gb.noPL();
-                gb.noAttributes();
-                break;
-            case USE_PLS_TO_ASSIGN:
-                if ( newLikelihoods == null || likelihoodsAreUninformative(newLikelihoods) ) {
-                    // if there is no mass on the (new) likelihoods, then just no-call the sample
-                    gb.alleles(noCallAlleles(ploidy));
-                    gb.noGQ();
-                } else {
-                    // find the genotype with maximum likelihoods
-                    final int PLindex = MathUtils.maxElementIndex(newLikelihoods);
-                    final List<Allele> alleles = new ArrayList<>();
-                    for ( final Integer alleleIndex : GenotypeLikelihoods.getAlleles(PLindex, ploidy)) {
-                        alleles.add(allelesToUse.get(alleleIndex) );
-                    }
-                    gb.alleles(alleles);
-                    gb.log10PError(GenotypeLikelihoods.getGQLog10FromLikelihoods(PLindex, newLikelihoods));
-                }
-                break;
             case BEST_MATCH_TO_ORIGINAL:
                 final List<Allele> best = new LinkedList<>();
                 final Allele ref = allelesToUse.get(0);
@@ -342,43 +315,6 @@ public class SplitMultiAllelicSites extends VariantWalker {
                 break;
         }
     }
-
-    /**
-     * Returns a {@link Allele#NO_CALL NO_CALL} allele list provided the ploidy.
-     *
-     * @param ploidy the required ploidy.
-     *
-     * @return never {@code null}, but an empty list if {@code ploidy} is equal or less than 0. The returned list
-     *   might or might not be mutable.
-     */
-    public static List<Allele> noCallAlleles(final int ploidy) {
-        if (NOCALL_LISTS.length <= ploidy)
-            ensureNoCallListsCapacity(ploidy);
-        return NOCALL_LISTS[ploidy];
-    }
-
-    /**
-     * Cached NO_CALL immutable lists where the position ith contains the list with i elements.
-     */
-    private static List<Allele>[] NOCALL_LISTS = new List[] {
-            Collections.emptyList(),
-            Collections.singletonList(Allele.NO_CALL),
-            Collections.nCopies(2,Allele.NO_CALL)
-    };
-
-    /**
-     * Synchronized code to ensure that {@link #NOCALL_LISTS} has enough entries beyod the requested ploidy
-     * @param capacity the requested ploidy.
-     */
-    private static synchronized void ensureNoCallListsCapacity(final int capacity) {
-        final int currentCapacity = NOCALL_LISTS.length - 1;
-        if (currentCapacity >= capacity)
-            return;
-        NOCALL_LISTS = Arrays.copyOf(NOCALL_LISTS,Math.max(capacity,currentCapacity << 1) + 1);
-        for (int i = currentCapacity + 1; i < NOCALL_LISTS.length; i++)
-            NOCALL_LISTS[i] = Collections.nCopies(i,Allele.NO_CALL);
-    }
-
 
 
     /**
