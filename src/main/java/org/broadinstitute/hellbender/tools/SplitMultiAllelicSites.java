@@ -4,6 +4,8 @@ import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFConstants;
 import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.ReadsContext;
@@ -12,10 +14,17 @@ import org.broadinstitute.hellbender.engine.VariantWalker;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
+import picard.cmdline.programgroups.VariantManipulationProgramGroup;
 
 import java.io.File;
 import java.util.*;
 
+@CommandLineProgramProperties(
+        summary = "Splits multiallelics",
+        oneLineSummary = "Splits multiallelics",
+        programGroup = VariantManipulationProgramGroup.class
+)
+@DocumentedFeature
 public class SplitMultiAllelicSites extends VariantWalker {
 
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
@@ -210,12 +219,13 @@ public class SplitMultiAllelicSites extends VariantWalker {
             }
 
             // create the new strand allele counts array from the used alleles
-            if ( g.hasExtendedAttribute(VCFConstants.STRAND_BIAS_KEY)){
+            /*if ( g.hasExtendedAttribute(VCFConstants.STRAND_BIAS_KEY)){
                 int[] newSACs = makeNewSACs(g, sacIndexesToUse);
                 gb.attribute(VCFConstants.STRAND_BIAS_KEY, newSACs);
-            }
+            }*/
 
-            updateGenotypeAfterSubsetting(g.getAlleles(), g.getPloidy(), gb, assignGenotypes, newLikelihoods, allelesToUse);
+
+            updateGenotypeAfterSubsetting(g.getAlleles(), g.getPloidy(), gb, assignGenotypes, newLikelihoods, allelesToUse, g.getExtendedAttribute("AF").toString());
             newGTs.add(gb.make());
         }
 
@@ -297,7 +307,8 @@ public class SplitMultiAllelicSites extends VariantWalker {
                                                      final GenotypeBuilder gb,
                                                      final GenotypeAssignmentMethod assignmentMethod,
                                                      final double[] newLikelihoods,
-                                                     final List<Allele> allelesToUse) {
+                                                     final List<Allele> allelesToUse,
+                                                     final String AFvalue) {
         if ( originalGT == null ) throw new IllegalArgumentException("originalGT cannot be null");
         if ( gb == null ) throw new IllegalArgumentException("gb cannot be null");
         if ( allelesToUse.isEmpty() || allelesToUse == null ) throw new IllegalArgumentException("allelesToUse cannot be empty or null");
@@ -307,11 +318,21 @@ public class SplitMultiAllelicSites extends VariantWalker {
                 break;
             case BEST_MATCH_TO_ORIGINAL:
                 final List<Allele> best = new LinkedList<>();
+                List<String> AFs = Arrays.asList(AFvalue.split(","));
                 final Allele ref = allelesToUse.get(0);
+                String AF = "0";
+                for (int i=0; i< originalGT.size(); i++) {
+                    final Allele originalAllele = originalGT.get(i);
+                    if (i > 0 && allelesToUse.contains(originalAllele) ) {
+                        AF = AFs.get(i - 1);
+                    }
+                    best.add((allelesToUse.contains(originalAllele) || originalAllele.isNoCall()) ? originalAllele : ref);
+                }
                 for ( final Allele originalAllele : originalGT ) {
                     best.add((allelesToUse.contains(originalAllele) || originalAllele.isNoCall()) ? originalAllele : ref);
                 }
                 gb.alleles(best);
+                gb.attribute("AF", AF);
                 break;
         }
     }
