@@ -202,11 +202,21 @@ public final class XGBoostEvidenceFilter implements Iterator<BreakpointEvidence>
                 DEFAULT_GOOD_MAPPABILITY
                 : getGenomeIntervalsOverlap(evidence, umapS100Mappability, readMetadata);
 
-        // either templateSize is defined (for ReadEvidence) or readCount (for TemplateSizeAnomaly).
-        final double templateSizeOrReadCount = getTemplateSizeOrReadCount(evidence);
+        // either templateSize is defined (for ReadEvidence) or readCount (for TemplateSizeAnomaly). Set the undefined
+        // value to NaN.
+        final double templateSize;
+        final double readCount;
+        if(evidence instanceof ReadEvidence) {
+            templateSize = getTemplateSize((ReadEvidence) evidence);
+            readCount = Double.NaN;
+        } else {
+            templateSize = Double.NaN;
+            readCount = getReadCounts((TemplateSizeAnomaly) evidence);
+        }
         return new EvidenceFeatures(
                 new double[]{
-                        cigarQualityInfo.basesMatched, cigarQualityInfo.referenceLength, evidenceType, mappingQuality, templateSizeOrReadCount,
+                        cigarQualityInfo.basesMatched, cigarQualityInfo.referenceLength, evidenceType, mappingQuality,
+                        templateSize, readCount,
                         individualOverlapInfo.numOverlap, individualOverlapInfo.totalOverlapMappingQuality,
                         individualOverlapInfo.meanOverlapMappingQuality, individualOverlapInfo.numCoherent,
                         individualOverlapInfo.totalCoherentMappingQuality,
@@ -239,17 +249,6 @@ public final class XGBoostEvidenceFilter implements Iterator<BreakpointEvidence>
         // Note: return "max" mapping quality for non-ReadEvidence. Reasoning: features using this function depend on
         // sum or average of read qualities. Non-ReadEvidence isn't *bad* per se, so give it a good score.
         return evidence instanceof ReadEvidence ? ((ReadEvidence) evidence).getMappingQuality() : DEFAULT_GOOD_MAPPING_QUALITY;
-    }
-
-    private double getTemplateSizeOrReadCount(final BreakpointEvidence evidence) {
-        if(evidence instanceof ReadEvidence) {
-            return getTemplateSize((ReadEvidence) evidence);
-        } else if(evidence instanceof TemplateSizeAnomaly) {
-            return getReadCounts((TemplateSizeAnomaly) evidence);
-        } else {
-            throw new IllegalStateException("templateSizeOrReadCount feature is only defined for ReadEvidence and TemplateSizeAnomaly, not "
-                    + evidence.getClass().getName());
-        }
     }
 
     /** For ReadEvidence, return templateSize as percentile of library's cumulative density function */
