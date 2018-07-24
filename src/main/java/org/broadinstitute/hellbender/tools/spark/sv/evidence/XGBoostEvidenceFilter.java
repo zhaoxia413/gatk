@@ -418,12 +418,20 @@ public final class XGBoostEvidenceFilter implements Iterator<BreakpointEvidence>
                                                     final ReadMetadata readMetadata) {
         final SimpleInterval simpleInterval = evidence.getLocation().toSimpleInterval(readMetadata);
         int overlap = 0;
+        int maxEnd = Integer.MIN_VALUE;
         for(final Iterator<BEDFeature> overlapperItr = genomeIntervals.query(simpleInterval); overlapperItr.hasNext();) {
             final BEDFeature overlapper = overlapperItr.next();
+            if(overlapper.getEnd() <= maxEnd) {
+                continue;
+            }
             // " + 1" because genome tract data is semi-closed, but BEDFeature is fully closed
             final int overlapLength = Math.min(simpleInterval.getEnd(), overlapper.getEnd()) + 1
-                    - Math.max(simpleInterval.getStart(), overlapper.getStart());
+                    - Math.max(simpleInterval.getStart(), Math.max(overlapper.getStart(), maxEnd + 1));
             overlap += overlapLength;
+            maxEnd = overlapper.getEnd();
+            if(maxEnd + 1 >= simpleInterval.getEnd()) {
+                break;
+            }
         }
         return overlap / (double)simpleInterval.size();
     }
