@@ -379,7 +379,7 @@ private void applyAFFilter(final VariantContext vc, final VariantContextBuilder 
         applyBaseQualityFilter(MTFAC, vc, filterResult);
         applyMappingQualityFilter(MTFAC, vc, filterResult);
         applyMedianFragmentLengthDifferenceFilter(MTFAC, vc, filterResult);
-        applyReadPositionFilter(MTFAC, vc, filterResult);
+        //applyReadPositionFilter(MTFAC, vc, filterResult);
 
         // The following filters use the information gathered during the first pass
         applyReadOrientationFilter(vc, filterResult, firstPass);
@@ -389,5 +389,4 @@ private void applyAFFilter(final VariantContext vc, final VariantContextBuilder 
     private int[] getIntArrayTumorField(final VariantContext vc, final String key) {
         return GATKProtectedVariantContextUtils.getAttributeAsIntArray(vc.getGenotype(tumorSample), key, () -> null, 0);
     }
-
 }
