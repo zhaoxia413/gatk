@@ -6,7 +6,6 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
 import org.apache.commons.math3.distribution.BinomialDistribution;
-import org.broadinstitute.hellbender.engine.VariantWalker;
 import org.broadinstitute.hellbender.tools.walkers.annotator.*;
 import org.broadinstitute.hellbender.tools.walkers.contamination.ContaminationRecord;
 import org.broadinstitute.hellbender.tools.walkers.contamination.MinorAlleleFractionRecord;
@@ -80,9 +79,17 @@ public class Mutect2FilteringEngine {
 
     private void applyDiscordantMatesFilter(final VariantContext vc, final VariantContextBuilder vcb) {
         Genotype tumorGenotype = vc.getGenotype(tumorSample);
-        if (tumorGenotype.hasAnyAttribute("NON_MT_OA")) {
-            if (Double.parseDouble((String) tumorGenotype.getAnyAttribute("NON_MT_OA")) > 30) {
-                vcb.filter(GATKVCFConstants.DISCORDANT_MATES_NAME);
+        if (tumorGenotype.hasAnyAttribute("NON_MT_OA") & vc.isBiallelic()) {
+            int[] nonMtOa = GATKProtectedVariantContextUtils.getAttributeAsIntArray(tumorGenotype, "NON_MT_OA", () -> null, -1);
+            int[] ad = tumorGenotype.getAD();
+            int[] mtOA = new int[nonMtOa.length];
+            for(int i=0; i<nonMtOa.length; i++) {
+                mtOA[i] = ad[i] - nonMtOa[i];
+            }
+            int[][] matrix = new int[][]{mtOA, nonMtOa};
+            double p = FisherExactTest.twoSidedPValue(matrix);
+            if (p < 5e-7) {
+                vcb.filter(GATKVCFConstants.NON_MT_READS);
             }
         }
     }
@@ -367,7 +374,7 @@ private void applyAFFilter(final VariantContext vc, final VariantContextBuilder 
         applyClusteredEventFilter(vc, filterResult);
         applyDuplicatedAltReadFilter(MTFAC, vc, filterResult);
         applyTriallelicFilter(vc, filterResult);
-	//applyDiscordantMatesFilter(vc, filterResult);
+	applyDiscordantMatesFilter(vc, filterResult);
 	applyAFFilter(vc, vcb);
 	applyTLODDFilter(vc, vcb);
         applyPanelOfNormalsFilter(MTFAC, vc, filterResult);
