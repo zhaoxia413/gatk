@@ -57,13 +57,13 @@ public final class ReadFilterLibrary {
         private static final long serialVersionUID = 1L;
         @Override
         public boolean test(final GATKRead read) {
-            boolean filter = false;
+            boolean accept = true;
             if (read.hasAttribute("OA") & read.hasAttribute("XO")) {
-                filter = !read.getAttributeAsString("OA").split(",")[0].equals(read.getAttributeAsString("XO").split(",")[0]);
+                accept = read.getAttributeAsString("OA").split(",")[0].equals(read.getAttributeAsString("XO").split(",")[0]);
             } else if (read.hasAttribute("OA")) {
-                filter = true;
+                accept = false;
             }
-            return filter;
+            return accept;
         }
     }
 
