@@ -52,6 +52,21 @@ public final class ReadFilterLibrary {
         @Override public boolean test (final GATKRead read) {
             return CigarUtils.isGood(read.getCigar());}}
 
+    @DocumentedFeature(groupName=HelpConstants.DOC_CAT_READFILTERS, groupSummary=HelpConstants.DOC_CAT_READFILTERS_SUMMARY, summary = "Keep only reads containing good CIGAR string")
+    public static class DiscordantOAFilter extends ReadFilter {
+        private static final long serialVersionUID = 1L;
+        @Override
+        public boolean test(final GATKRead read) {
+            boolean filter = false;
+            if (read.hasAttribute("OA") & read.hasAttribute("XO")) {
+                filter = !read.getAttributeAsString("OA").split(",")[0].equals(read.getAttributeAsString("XO").split(",")[0]);
+            } else if (read.hasAttribute("OA")) {
+                filter = true;
+            }
+            return filter;
+        }
+    }
+
     /** Filter out reads with fragment length (insert size) different from zero. */
     @DocumentedFeature(groupName=HelpConstants.DOC_CAT_READFILTERS, groupSummary=HelpConstants.DOC_CAT_READFILTERS_SUMMARY, summary = "Filter out reads with fragment length different from zero")
     public static class NonZeroFragmentLengthReadFilter extends ReadFilter {
@@ -270,6 +285,7 @@ public final class ReadFilterLibrary {
     public static final CigarContainsNoNOperator CIGAR_CONTAINS_NO_N_OPERATOR = new CigarContainsNoNOperator();
     public static final FirstOfPairReadFilter FIRST_OF_PAIR = new FirstOfPairReadFilter();
     public static final GoodCigarReadFilter GOOD_CIGAR = new GoodCigarReadFilter();
+    public static final DiscordantOAFilter DISCORDANT_OA_FILTER = new DiscordantOAFilter();
     public static final HasReadGroupReadFilter HAS_READ_GROUP = new HasReadGroupReadFilter();
     public static final MappedReadFilter MAPPED = new MappedReadFilter();
     public static final MappingQualityAvailableReadFilter MAPPING_QUALITY_AVAILABLE = new MappingQualityAvailableReadFilter();
