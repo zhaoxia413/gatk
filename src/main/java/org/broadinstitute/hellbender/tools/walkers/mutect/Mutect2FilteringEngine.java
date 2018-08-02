@@ -11,6 +11,8 @@ import org.broadinstitute.hellbender.tools.walkers.contamination.ContaminationRe
 import org.broadinstitute.hellbender.tools.walkers.contamination.MinorAlleleFractionRecord;
 import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
+import org.broadinstitute.hellbender.utils.variant.GATKVariant;
+
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -82,13 +84,7 @@ public class Mutect2FilteringEngine {
         if (tumorGenotype.hasAnyAttribute("NON_MT_OA") & vc.isBiallelic()) {
             int[] nonMtOa = GATKProtectedVariantContextUtils.getAttributeAsIntArray(tumorGenotype, "NON_MT_OA", () -> null, -1);
             int[] ad = tumorGenotype.getAD();
-            int[] mtOA = new int[nonMtOa.length];
-            for(int i=0; i<nonMtOa.length; i++) {
-                mtOA[i] = ad[i] - nonMtOa[i];
-            }
-            int[][] matrix = new int[][]{mtOA, nonMtOa};
-            double p = FisherExactTest.twoSidedPValue(matrix);
-            if (p < 5e-7) {
+            if (ad[1] - nonMtOa[1] == 0) {
                 vcb.filter(GATKVCFConstants.NON_MT_READS);
             }
         }
