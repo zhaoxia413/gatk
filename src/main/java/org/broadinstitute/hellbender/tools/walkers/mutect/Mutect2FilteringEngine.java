@@ -84,7 +84,7 @@ public class Mutect2FilteringEngine {
         if (tumorGenotype.hasAnyAttribute("NON_MT_OA") & vc.isBiallelic()) {
             int[] nonMtOa = GATKProtectedVariantContextUtils.getAttributeAsIntArray(tumorGenotype, "NON_MT_OA", () -> null, -1);
             int[] ad = tumorGenotype.getAD();
-            if (nonMtOa[1] / ad[1] > .85) {
+            if ((double) nonMtOa[1] / ad[1] > .85) {
                 vcb.filter(GATKVCFConstants.NON_MT_READS);
             }
         }
