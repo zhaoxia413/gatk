@@ -160,7 +160,7 @@ public final class GATKVCFConstants {
     public final static String CONTAMINATION_FILTER_NAME =                      "contamination";
     public final static String READ_ORIENTATION_ARTIFACT_FILTER_NAME =          "read_orientation_artifact";
     public final static String BAD_HAPLOTYPE_FILTER_NAME =          "bad_haplotype";
-    public final static String NON_MT_READS =                                   "non_mt_fisher";
+    public final static String NON_MT_READS =                                   "possible_numt_variant";
     public final static String LOW_ALLELE_FRACTION_NAME =                       "low_allele_fraction";
     public final static String LOW_TLODD_NAME =                                 "low_tlod_by_depth";
 
