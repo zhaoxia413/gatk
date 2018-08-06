@@ -330,4 +330,9 @@ public class StructuralVariationDiscoveryArgumentCollection implements Serializa
             ParamUtils.isPositive(maxCallableImpreciseVariantDeletionSize, "invalid value provided to maxCallableImpreciseVariantDeletionSize: " + maxCallableImpreciseVariantDeletionSize);
         }
     }
+
+    public static class TrainEvidenceFilterArgumentCollection implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+    }
 }
