@@ -42,7 +42,7 @@ public class PostProcessingM2Calls extends VariantWalker {
                 final VariantContextBuilder builder = new VariantContextBuilder(variant);
                 final GenotypeBuilder gb = new GenotypeBuilder(variant.getGenotype(0));
                 int[] AD = variant.getGenotype(0).getAD();
-                gb.attribute(VCFConstants.ALLELE_FREQUENCY_KEY, AD[1]/(AD[0] + AD[1]));
+                gb.attribute(VCFConstants.ALLELE_FREQUENCY_KEY, (double) AD[1]/(AD[0] + AD[1]));
                 builder.genotypes(gb.make());
                 vcfWriter.add(builder.make());
             }
