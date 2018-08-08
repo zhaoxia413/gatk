@@ -36,7 +36,7 @@ public class PostProcessingM2Calls extends VariantWalker {
     public void apply(VariantContext variant, ReadsContext readsContext, ReferenceContext referenceContext, FeatureContext featureContext) {
         if(variant.isBiallelic()) {
             double AF = Double.parseDouble(variant.getGenotype(0).getAnyAttribute(VCFConstants.ALLELE_FREQUENCY_KEY).toString());
-            if (AF < .95) {
+            if (AF < .5) {
                 vcfWriter.add(variant);
             } else {
                 final VariantContextBuilder builder = new VariantContextBuilder(variant);
