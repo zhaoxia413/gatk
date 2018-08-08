@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.spark.sv.evidence;
 
+import com.sun.javaws.exceptions.InvalidArgumentException;
 import ml.dmlc.xgboost4j.java.Booster;
 import ml.dmlc.xgboost4j.java.DMatrix;
 import ml.dmlc.xgboost4j.java.XGBoost;
@@ -106,13 +107,182 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
     private final String evalMetric = "logloss";
 
     @Argument(doc="Classifier tries to maximize eval-metric if true, minimize it if false.",
-            fullName = "maximize-eval-metric", optional = false)
+            fullName = "maximize-eval-metric", optional = true)
     private final boolean maximizeEvalMetric = false;
 
     @Argument(doc="Seed for random numbers. If null, initialize randomly",
             fullName = "random-seed", optional = true)
     private final Long seed = 0L;
 
+
+    enum ClassifierTuningStrategy { RANDOM }
+    enum ClassifierParamRangeType { LINEAR, LOG, INTEGER_LINEAR, INTEGER_LOG }
+
+    abstract class ClassifierTuner {
+        protected final Map<String, ClassifierParamRange<?>> tuneParameters;
+        protected final int numSamples;
+        protected final boolean maximizeEvalMetric;
+        protected final List<Map<String, Object>> hyperparameterSets;
+        protected final List<Double> hyperparameterScores;
+
+        ClassifierTuner(final Map<String, ClassifierParamRange<?>> tuneParameters, final int numSamples,
+                        final boolean maximizeEvalMetric) {
+            this.tuneParameters = tuneParameters;
+            this.numSamples = numSamples;
+            this.hyperparameterSets = new ArrayList<> ();
+            this.hyperparameterScores = new ArrayList<>();
+            this.maximizeEvalMetric = maximizeEvalMetric;
+        }
+
+        abstract protected Map<String, Object> chooseNextHyperparameters(final double lastScore);
+
+        
+
+
+    }
+
+    interface ClassifierParamRange<T> {
+        T[] getRandomSamples(final Random random, final int numSamples);
+    }
+
+    class ClassifierLinearParamRange implements ClassifierParamRange<Double> {
+        private final double low;
+        private final double high;
+
+        ClassifierLinearParamRange(double low, double high) {
+            this.low = low;
+            this.high = high;
+        }
+
+        public Double[] getRandomSamples(final Random random, final int numSamples) {
+            final Double[] samples = new Double[numSamples];
+            if(numSamples < 2) {
+                if(numSamples == 1) {
+                    samples[0] = (high + low) / 2.0;
+                }
+                return samples;
+            }
+            final double delta = (high - low) / (numSamples - 1);
+            double val = low;
+            final int[] permutation = getRandomPermutation(random, numSamples);
+            samples[permutation[0]] = low;
+            // abort loop one step early and assign high to last element, to avoid round-off error potentially assigning
+            // samples outside allowed range
+            for(int i = 1; i < numSamples - 1; ++i) {
+                val += delta;
+                samples[permutation[i]] = val;
+            }
+            samples[permutation[numSamples - 1]] = high;
+            return samples;
+        }
+    }
+
+    class ClassifierLogParamRange implements ClassifierParamRange<Double> {
+        private final double low;
+        private final double high;
+
+        ClassifierLogParamRange(double low, double high) {
+            if(low * high <= 0) {
+                throw new IllegalArgumentException("low (" + low + ") and high (" + high + ") must be the same sign, and non-zero");
+            }
+            this.low = low;
+            this.high = high;
+        }
+
+        public Double[] getRandomSamples(final Random random, final int numSamples) {
+            final Double[] samples = new Double[numSamples];
+            if(numSamples < 2) {
+                if(numSamples == 1) {
+                    samples[0] = Math.sqrt(high * low);
+                }
+                return samples;
+            }
+            final double delta = Math.pow(high / low, 1.0 / (numSamples - 1);
+            double val = low;
+            final int[] permutation = getRandomPermutation(random, numSamples);
+            samples[permutation[0]] = low;
+            // abort loop one step early and assign high to last element, to avoid round-off error potentially assigning
+            // samples outside allowed range
+            for(int i = 1; i < numSamples - 1; ++i) {
+                val *= delta;
+                samples[permutation[i]] = val;
+            }
+            samples[permutation[numSamples - 1]] = high;
+            return samples;
+        }
+    }
+
+    class ClassifierIntegerLinearParamRange implements ClassifierParamRange<Integer> {
+        private final int low;
+        private final int high;
+
+        ClassifierIntegerLinearParamRange(int low, int high) {
+            this.low = low;
+            this.high = high;
+        }
+
+        public Integer[] getRandomSamples(final Random random, final int numSamples) {
+            final Integer[] samples = new Integer[numSamples];
+            if(numSamples < 2) {
+                if(numSamples == 1) {
+                    samples[0] = (int)Math.round((high + low) / 2.0);
+                }
+                return samples;
+            }
+            final double delta = (high - low) / (numSamples - 1);
+            double val = low;
+            final int[] permutation = getRandomPermutation(random, numSamples);
+            samples[permutation[0]] = low;
+            // abort loop one step early and assign high to last element, to avoid round-off error potentially assigning
+            // samples outside allowed range
+            for(int i = 1; i < numSamples - 1; ++i) {
+                val += delta;
+                samples[permutation[i]] = (int)Math.round(val);
+            }
+            samples[permutation[numSamples - 1]] = high;
+            return samples;
+        }
+    }
+
+    class ClassifierIntegerLogParamRange implements ClassifierParamRange<Integer> {
+        private final int low;
+        private final int high;
+
+        ClassifierIntegerLogParamRange(int low, int high) {
+            if(low * high <= 0) {
+                throw new IllegalArgumentException("low (" + low + ") and high (" + high + ") must be the same sign, and non-zero");
+            }
+            this.low = low;
+            this.high = high;
+        }
+
+        public Integer[] getRandomSamples(final Random random, final int numSamples) {
+            final Integer[] samples = new Integer[numSamples];
+            if(numSamples < 2) {
+                if(numSamples == 1) {
+                    samples[0] = (int)Math.round(Math.sqrt(high * low));
+                }
+                return samples;
+            }
+            final double delta = Math.pow(high / low, 1.0 / (numSamples - 1);
+            double val = low;
+            final int[] permutation = getRandomPermutation(random, numSamples);
+            samples[permutation[0]] = low;
+            // abort loop one step early and assign high to last element, to avoid round-off error potentially assigning
+            // samples outside allowed range
+            for(int i = 1; i < numSamples - 1; ++i) {
+                val *= delta;
+                samples[permutation[i]] = (int)Math.round(val);
+            }
+            samples[permutation[numSamples - 1]] = high;
+            return samples;
+        }
+    }
+
+
+    @Argument(doc="Tuning strategy for choosing classifier hyperparameters",
+            fullName = "classifier-tuning-strategy", optional = true)
+    final ClassifierTuningStrategy classifierTuningStrategy = ClassifierTuningStrategy.RANDOM;
 
     private final Random random = (seed == null ? new Random() : new Random(seed));
     /**
@@ -129,7 +299,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         localLogger.info("Setting fit parameters");
         //specify parameters
         @SuppressWarnings("serial")
-        Map<String, Object> fitParams = new HashMap<String, Object>() {
+        Map<String, Object> classifierParameters = new HashMap<String, Object>() {
             {
                 put("eta", 1.0);
                 put("max_depth", 2);
@@ -154,7 +324,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         localLogger.info("Fitting training data");
         final Booster booster;
         try {
-            booster = XGBoost.train(trainMatrix, fitParams, maxTrainingRounds, watches, null, null);
+            booster = XGBoost.train(trainMatrix, classifierParameters, maxTrainingRounds, watches, null, null);
         } catch (XGBoostError err) {
             throw new GATKException(err.getMessage());
         }
@@ -171,7 +341,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         }
         localLogger.info("Accuracy predicted on test set = " + accuracy);
 
-        final float[] trainingTrace = getTrainingTrace(fitParams, trainMatrix, testMatrix, maxTrainingRounds, earlyStoppingRounds, maximizeEvalMetric);
+        final float[] trainingTrace = getTrainingTrace(classifierParameters, trainMatrix, testMatrix, maxTrainingRounds, earlyStoppingRounds, maximizeEvalMetric);
         localLogger.info("trainingTrace:");
         for(int index = 0; index < trainingTrace.length; ++index) {
             localLogger.info(index + ": " + trainingTrace[index]);
@@ -276,8 +446,94 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         }
         return numCorrect / (double)correctLabels.length;
     }
+    
+    private Map<String, Object> tuneClassifierParameters(final Map<String, Object> classifierParameters,
+                                                         final Map<String, ClassifierParamRange<?>> tuneClassifierParameters,
+                                                         final ClassifierTuningStrategy classifierTuningStrategy,
+                                                         final DMatrix trainMatrix, final int[] stratify,
+                                                         final int numCrossvalidationFolds, final int maxTrainingRounds,
+                                                         final int earlyStoppingRounds, final boolean maximizeEvalMetric) {
+        final List<TrainTestSplit> splits = new ArrayList<>();
+        TrainTestSplit.getCrossvalidationSplits(trainMatrix, numCrossvalidationFolds, random, stratify)
+                .forEachRemaining(splits::add);
+        switch(classifierTuningStrategy) {
+            case RANDOM:
 
-    private float[] getTrainingTrace(final Map<String, Object> fitParams,
+
+            default:
+                throw new IllegalStateException("Invalid ClassifierTuningStrategy: " + classifierTuningStrategy);
+        }
+
+
+    }
+
+
+    private void setTrainingScore(final Map<String, Object> classifierParameters,
+                                  final DMatrix trainMatrix, final TrainTestSplit[] splits,
+                                  final int maxTrainingRounds, final int earlyStoppingRounds,
+                                  final boolean maximizeEvalMetric) {
+        final float[][] trainingTraces = getCrossvalidatedTrainingTraces(
+                classifierParameters, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds, maximizeEvalMetric
+        );
+
+        // find the index with the best total (i.e. mean) score across rounds. This yields the optimal number of
+        // rounds of training
+        float bestTotalScore = maximizeEvalMetric ? Float.MIN_VALUE : Float.MAX_VALUE;
+        int bestRoundIndex = -1;
+        for(int roundIndex = 0; roundIndex < maxTrainingRounds; ++roundIndex) {
+            float roundScore = trainingTraces[0][roundIndex];
+            for(int fold = 1; fold < trainingTraces.length; ++fold) {
+                roundScore += trainingTraces[fold][roundIndex];
+            }
+            if(maximizeEvalMetric ? roundScore > bestTotalScore : roundScore < bestTotalScore) {
+                // the score at this round of training is the best so far
+                bestTotalScore = roundScore;
+                bestRoundIndex = roundIndex;
+            }
+        }
+        final int numTrainingRounds = bestRoundIndex + 1;
+
+        // report the overall score for this set of parameters as the score of the *worst* trace at the optimal training
+        // index. Selecting the worst trace demands high reliability from the classifier across similar data sets.
+        float trainingScore = trainingTraces[0][bestRoundIndex];
+        if(maximizeEvalMetric) {
+            for (int fold = 1; fold < trainingTraces.length; ++fold) {
+                trainingScore = Math.min(trainingScore, trainingTraces[fold][bestRoundIndex]);
+            }
+        } else {
+            for (int fold = 1; fold < trainingTraces.length; ++fold) {
+                trainingScore = Math.max(trainingScore, trainingTraces[fold][bestRoundIndex]);
+            }
+        }
+
+        classifierParameters.put("training_score", bestTotalScore);
+        classifierParameters.put("training_rounds", numTrainingRounds);
+    }
+
+
+    private float[][] getCrossvalidatedTrainingTraces(final Map<String, Object> classifierParameters,
+                                                      final DMatrix trainMatrix, final TrainTestSplit[] splits,
+                                                      final int maxTrainingRounds, final int earlyStoppingRounds,
+                                                      final boolean maximizeEvalMetric) {
+        final int numCrossvalidationFolds = splits.length;
+        float[][] trainingTraces = new float[numCrossvalidationFolds][];
+        for(int fold = 0; fold < numCrossvalidationFolds; ++fold) {
+            final TrainTestSplit split = splits[fold];
+            try {
+                trainingTraces[fold] = getTrainingTrace(
+                        classifierParameters, trainMatrix.slice(split.trainRows), trainMatrix.slice(split.testRows),
+                        maxTrainingRounds, earlyStoppingRounds, maximizeEvalMetric
+                );
+            } catch(XGBoostError err) {
+                throw new GATKException(err.getMessage());
+            }
+
+        }
+        return trainingTraces;
+    }
+
+
+    private float[] getTrainingTrace(final Map<String, Object> classifierParameters,
                                      final DMatrix trainMatrix, final DMatrix testMatrix,
                                      final int maxTrainingRounds, final int earlyStoppingRounds,
                                      final boolean maximizeEvalMetric) {
@@ -289,7 +545,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         int stopRound = earlyStoppingRounds;
         try {
             Map<String, DMatrix> watches = new HashMap<> ();
-            final Booster booster = XGBoost.train(trainMatrix, fitParams, 1, watches, null, null);
+            final Booster booster = XGBoost.train(trainMatrix, classifierParameters, 1, watches, null, null);
             booster.evalSet(evalMatrices, evalNames, 0, metricsOut);
             trainingTrace[0] = metricsOut[0];
             bestTraceValue = trainingTrace[0];
@@ -315,94 +571,6 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         return trainingTrace;
     }
 
-    private float[][] getCrossvalidatedTrainingTraces(final Map<String, Object> fitParams,
-                                                      final DMatrix trainMatrix, final TrainTestSplit[] splits,
-                                                      final int maxTrainingRounds, final int earlyStoppingRounds,
-                                                      final boolean maximizeEvalMetric) {
-        final int numCrossvalidationFolds = splits.length;
-        float[][] trainingTraces = new float[numCrossvalidationFolds][];
-        for(int fold = 0; fold < numCrossvalidationFolds; ++fold) {
-            final TrainTestSplit split = splits[fold];
-            try {
-                trainingTraces[fold] = getTrainingTrace(
-                        fitParams, trainMatrix.slice(split.trainRows), trainMatrix.slice(split.testRows),
-                        maxTrainingRounds, earlyStoppingRounds, maximizeEvalMetric
-                );
-            } catch(XGBoostError err) {
-                throw new GATKException(err.getMessage());
-            }
-
-        }
-        return trainingTraces;
-    }
-
-    private void setTrainingScore(final Map<String, Object> fitParams,
-                                   final DMatrix trainMatrix, final TrainTestSplit[] splits,
-                                   final int maxTrainingRounds, final int earlyStoppingRounds,
-                                   final boolean maximizeEvalMetric) {
-        final float[][] trainingTraces = getCrossvalidatedTrainingTraces(
-                fitParams, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds, maximizeEvalMetric
-        );
-        float bestScore = maximizeEvalMetric ? Float.MIN_VALUE : Float.MAX_VALUE;
-        int bestRoundIndex = -1;
-        for(int roundIndex = 0; roundIndex < maxTrainingRounds; ++roundIndex) {
-            float roundScore = trainingTraces[0][roundIndex];
-            for(int fold = 1; fold < trainingTraces.length; ++fold) {
-                roundScore += trainingTraces[fold][roundIndex];
-            }
-            if(maximizeEvalMetric ? roundScore > bestScore : roundScore < bestScore) {
-                // the score at this round of training is the best so far
-                bestScore = roundScore;
-                bestRoundIndex = roundIndex;
-            }
-        }
-        fitParams.put("training_score", bestScore);
-        fitParams.put("training_rounds", bestRoundIndex + 1);
-    }
-
-    private TrainTestSplit[] getCrossvalidationSplits(final DMatrix trainMatrix, final int numCrossvalidationFolds, final int[] stratify) {
-        return null;
-    }
-
-    private TrainTestSplit getTrainTestSplit(final DMatrix trainMatrix, final double trainingFraction, final int[] stratify) {
-        final int numRows;
-        try {
-            numRows = stratify == null ? (int)trainMatrix.rowNum() : stratify.length;
-        } catch(XGBoostError err) {
-            throw new GATKException(err.getMessage());
-        }
-        final int[] stratify_inds = stratify == null ?
-                getRandomPermutation(random, numRows)
-                : TrainTestSplit.getStratfiedIndexOrdering(random, stratify);
-        final double testingFraction = 1.0 - trainingFraction;
-        int nTrain = (int)Math.floor(numRows * trainingFraction);
-        int nTest = (int)Math.floor(numRows * testingFraction);
-        if(nTrain + nTest < numRows) {
-            if(trainingFraction * (nTest + 1) >= testingFraction * (nTrain + 1)) {
-                ++nTrain;
-            } else {
-                ++nTest;
-            }
-        }
-        final List<Integer> trainList = new ArrayList<>(nTrain);
-        final List<Integer> testList = new ArrayList<>(nTest);
-        int nextNumTrain = 1;
-        int nextNumTest = 1;
-        for(int i = 0; i < numRows; ++i) {
-            if(trainingFraction * nextNumTest >= testingFraction * nextNumTrain) {
-                // training set gets next index
-                trainList.add(stratify_inds[i]);
-                ++nextNumTrain;
-            } else {
-                testList.add(stratify_inds[i]);
-                ++nextNumTest;
-            }
-        }
-        return new TrainTestSplit(
-                ArrayUtils.toPrimitive(trainList.toArray(new Integer[0])),
-                ArrayUtils.toPrimitive(testList.toArray(new Integer[0]))
-        );
-    }
 
     static class TrainTestSplit {
         final int[] trainRows;
@@ -413,7 +581,66 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             this.testRows = testRows;
         }
 
-        static int[] getStratfiedIndexOrdering(final Random random, final int[] stratify) {
+        static TrainTestSplit getTrainTestSplit(final DMatrix trainMatrix, final double trainingFraction,
+                                                final Random random, final int[] stratify) {
+            final int numRows;
+            try {
+                numRows = stratify == null ? (int)trainMatrix.rowNum() : stratify.length;
+            } catch(XGBoostError err) {
+                throw new GATKException(err.getMessage());
+            }
+            if(trainingFraction < 0.5 * numRows) {
+                if(trainingFraction < 0) {
+                    throw new IllegalArgumentException("trainingFraction (" + trainingFraction + ") must be in range [0, 1]");
+                }
+                return new TrainTestSplit(new int[0], getRange(numRows));
+            } else if(trainingFraction > 1.0 - 0.5 * numRows) {
+                if(trainingFraction > 1) {
+                    throw new IllegalArgumentException("trainingFraction (" + trainingFraction + ") must be in range[0, 1]");
+                }
+                return new TrainTestSplit(getRange(numRows), new int[0]);
+            }
+            final int[] split_index_ordering = stratify == null ?
+                    getRandomPermutation(random, numRows)
+                    : TrainTestSplit.getStratfiedIndexOrdering(random, stratify);
+            final int numTrain = (int)Math.round(numRows * trainingFraction);
+            final int numTest = numRows - numTrain;
+            final int[] trainRows = new int[numTrain];
+            final int[] testRows = new int[numTest];
+            int nextTrainInd = 1;
+            int nextTestInd = 1;
+            for(int i = 0; i < numRows; ++i) {
+                if(numTrain * nextTestInd >= numTest * nextTrainInd) {
+                    // training set gets next index
+                    trainRows[nextTrainInd - 1] = split_index_ordering[i];
+                    ++nextTrainInd;
+                } else {
+                    testRows[nextTestInd - 1] = split_index_ordering[i];
+                    ++nextTestInd;
+                }
+            }
+            return new TrainTestSplit(trainRows, testRows);
+        }
+
+        static Iterator<TrainTestSplit> getCrossvalidationSplits(final DMatrix trainMatrix, final int numCrossvalidationFolds,
+                                                                 final Random random, final int[] stratify) {
+            if(numCrossvalidationFolds < 2) {
+                throw new IllegalArgumentException("numCrossvalidationFolds (" + numCrossvalidationFolds + ") must be >= 2");
+            }
+            final int numRows;
+            try {
+                numRows = stratify == null ? (int)trainMatrix.rowNum() : stratify.length;
+            } catch(XGBoostError err) {
+                throw new GATKException(err.getMessage());
+            }
+            final int[] split_index_ordering = stratify == null ?
+                    getRandomPermutation(random, numRows)
+                    : TrainTestSplit.getStratfiedIndexOrdering(random, stratify);
+
+            return new FoldSplitIterator(split_index_ordering, numCrossvalidationFolds);
+        }
+
+        private static int[] getStratfiedIndexOrdering(final Random random, final int[] stratify) {
             /*
             logical (but memory inefficient) process
             1. make a random permutation, and use it to permute stratify
@@ -429,6 +656,52 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             */
             final int[] permutation = getRandomPermutation(random, stratify.length);
             return slice(permutation, argsort(slice(stratify, permutation)));
+        }
+
+        private static class FoldSplitIterator implements Iterator<TrainTestSplit> {
+            private final int[] split_index_ordering;
+            private final int numFolds;
+            private int fold;
+
+            FoldSplitIterator(final int[] split_index_ordering, final int numFolds) {
+                this.split_index_ordering = split_index_ordering;
+                this.numFolds = numFolds;
+                this.fold = 0;
+            }
+
+            @Override
+            public boolean hasNext() {
+                return fold < numFolds;
+            }
+
+            @Override
+            public TrainTestSplit next() {
+                final int numTrain = (split_index_ordering.length - 1 - fold) / numFolds;
+                final int numTest = split_index_ordering.length - numTrain;
+                int[] trainRows = new int[numTrain];
+                int[] testRows = new int[numTest];
+                int testIndex;
+                int orderingIndex;
+                if(fold > 0) {
+                    for(testIndex = 0; testIndex < fold; ++testIndex) {
+                        testRows[testIndex] = split_index_ordering[testIndex];
+                    }
+                    orderingIndex = testIndex;
+                } else {
+                    orderingIndex = 0;
+                    testIndex = 0;
+                }
+                for(int trainIndex = 0; trainIndex < trainRows.length; ++trainIndex) {
+                    trainRows[trainIndex] = split_index_ordering[orderingIndex];
+                    final int orderingStop = Math.min(orderingIndex + numFolds, split_index_ordering.length);
+                    for(++orderingIndex; orderingIndex < orderingStop; ++orderingIndex, ++testIndex) {
+                        testRows[testIndex] = split_index_ordering[orderingIndex];
+                    }
+                }
+
+                ++fold;
+                return new TrainTestSplit(trainRows, testRows);
+            }
         }
     }
 }
