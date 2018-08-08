@@ -4,6 +4,7 @@ import ml.dmlc.xgboost4j.java.Booster;
 import ml.dmlc.xgboost4j.java.DMatrix;
 import ml.dmlc.xgboost4j.java.XGBoost;
 import ml.dmlc.xgboost4j.java.XGBoostError;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -19,8 +20,10 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection;
 import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryPipelineSpark;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 
 /**
  * (Internal) Trains classifier for filtering BreakpointEvidence, and produces supporting files for testing"
@@ -106,6 +109,12 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             fullName = "maximize-eval-metric", optional = false)
     private final boolean maximizeEvalMetric = false;
 
+    @Argument(doc="Seed for random numbers. If null, initialize randomly",
+            fullName = "random-seed", optional = true)
+    private final Long seed = 0L;
+
+
+    private final Random random = (seed == null ? new Random() : new Random(seed));
     /**
      * Demo stuff ENDS here....
      */
@@ -128,6 +137,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
                 put("objective", "binary:logistic");
                 put("nthread", 4);
                 put("eval_metric", evalMetric);
+                put("seed", (seed == null ? random.nextLong() : seed));
             }
         };
 
@@ -203,6 +213,30 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         return predictedLabels;
     }
 
+    private static Integer[] getRange(final Integer numElements) {
+        final Integer[] range = new Integer[numElements];
+        for(Integer i = 0; i < numElements; ++i) {
+            range[i] = i;
+        }
+        return range;
+    }
+
+    private static int[] getRange(final int numElements) {
+        final int[] range = new int[numElements];
+        for(int i = 0; i < numElements; ++i) {
+            range[i] = i;
+        }
+        return range;
+    }
+
+    private static int[] slice(final int[] arr, final int[] indices) {
+        final int[] sliced_arr = new int[indices.length];
+        for(int i = 0; i < indices.length; ++i) {
+            sliced_arr[i] = arr[indices[i]];
+        }
+        return sliced_arr;
+    }
+
     private static int argmax(final float[] arr) {
         int bestIndex = -1;
         float bestValue = Float.MIN_VALUE;
@@ -213,6 +247,24 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             }
         }
         return bestIndex;
+    }
+
+    private static int[] argsort(final int[] arr) {
+        final Integer[] sortIndices = getRange((Integer)arr.length);
+        Arrays.sort(sortIndices, Comparator.comparingInt(ind -> arr[ind]));
+        return ArrayUtils.toPrimitive(sortIndices);
+    }
+
+    private static int[] getRandomPermutation(final Random random, final int numElements) {
+        // Knuth shuffle
+        final int[] permutation = getRange(numElements);
+        for(int i = numElements; i > 0; --i) {
+            final int swap_ind = random.nextInt(i);
+            final int swap_val = permutation[swap_ind];
+            permutation[swap_ind] = permutation[i];
+            permutation[i] = swap_val;
+        }
+        return permutation;
     }
 
     private static double predictionAccuracy(final float[] predictedLabels, final float[] correctLabels) {
@@ -309,11 +361,47 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
     }
 
     private TrainTestSplit[] getCrossvalidationSplits(final DMatrix trainMatrix, final int numCrossvalidationFolds, final int[] stratify) {
-
+        return null;
     }
 
     private TrainTestSplit getTrainTestSplit(final DMatrix trainMatrix, final double trainingFraction, final int[] stratify) {
-
+        final int numRows;
+        try {
+            numRows = stratify == null ? (int)trainMatrix.rowNum() : stratify.length;
+        } catch(XGBoostError err) {
+            throw new GATKException(err.getMessage());
+        }
+        final int[] stratify_inds = stratify == null ?
+                getRandomPermutation(random, numRows)
+                : TrainTestSplit.getStratfiedIndexOrdering(random, stratify);
+        final double testingFraction = 1.0 - trainingFraction;
+        int nTrain = (int)Math.floor(numRows * trainingFraction);
+        int nTest = (int)Math.floor(numRows * testingFraction);
+        if(nTrain + nTest < numRows) {
+            if(trainingFraction * (nTest + 1) >= testingFraction * (nTrain + 1)) {
+                ++nTrain;
+            } else {
+                ++nTest;
+            }
+        }
+        final List<Integer> trainList = new ArrayList<>(nTrain);
+        final List<Integer> testList = new ArrayList<>(nTest);
+        int nextNumTrain = 1;
+        int nextNumTest = 1;
+        for(int i = 0; i < numRows; ++i) {
+            if(trainingFraction * nextNumTest >= testingFraction * nextNumTrain) {
+                // training set gets next index
+                trainList.add(stratify_inds[i]);
+                ++nextNumTrain;
+            } else {
+                testList.add(stratify_inds[i]);
+                ++nextNumTest;
+            }
+        }
+        return new TrainTestSplit(
+                ArrayUtils.toPrimitive(trainList.toArray(new Integer[0])),
+                ArrayUtils.toPrimitive(testList.toArray(new Integer[0]))
+        );
     }
 
     static class TrainTestSplit {
@@ -323,6 +411,24 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         TrainTestSplit(final int[] trainRows, final int[] testRows) {
             this.trainRows = trainRows;
             this.testRows = testRows;
+        }
+
+        static int[] getStratfiedIndexOrdering(final Random random, final int[] stratify) {
+            /*
+            logical (but memory inefficient) process
+            1. make a random permutation, and use it to permute stratify
+            final int[] permutation = getRange(stratify.length);
+            final int[] permuted_stratify = slice(stratify, permutation);
+            2. find the indices that would sort the permuted stratify array. The permutation ensures that entries with
+               the same value in stratify will be in random order. However, they point to the wrong stratify values.
+            final int[] permuted_sort_indices = argsort(permuted_stratify);
+            3. unpermute the sort_indices to permute to the correct stratify values. Because the sort visited the values
+               in random order, the ordering of stratify indices will be permuted (between indices pointing to equal
+               stratify values).
+            final int[] stratify_inds = slice(permutation, permuted_sort_indices);
+            */
+            final int[] permutation = getRandomPermutation(random, stratify.length);
+            return slice(permutation, argsort(slice(stratify, permutation)));
         }
     }
 }
