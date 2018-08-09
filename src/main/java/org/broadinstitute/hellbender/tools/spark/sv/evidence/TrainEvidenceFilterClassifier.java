@@ -1,6 +1,5 @@
 package org.broadinstitute.hellbender.tools.spark.sv.evidence;
 
-import com.sun.javaws.exceptions.InvalidArgumentException;
 import ml.dmlc.xgboost4j.java.Booster;
 import ml.dmlc.xgboost4j.java.DMatrix;
 import ml.dmlc.xgboost4j.java.XGBoost;
@@ -9,6 +8,7 @@ import org.apache.commons.lang3.ArrayUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.ml.classification.Classifier;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.BetaFeature;
@@ -116,7 +116,6 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
 
 
     enum ClassifierTuningStrategy { RANDOM }
-    enum ClassifierParamRangeType { LINEAR, LOG, INTEGER_LINEAR, INTEGER_LOG }
 
     abstract class ClassifierTuner {
         protected final Map<String, ClassifierParamRange<?>> tuneParameters;
@@ -127,6 +126,9 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
 
         ClassifierTuner(final Map<String, ClassifierParamRange<?>> tuneParameters, final int numSamples,
                         final boolean maximizeEvalMetric) {
+            if(numSamples < 1) {
+                throw new IllegalArgumentException("numSamples (" + numSamples + ") must be >= 1");
+            }
             this.tuneParameters = tuneParameters;
             this.numSamples = numSamples;
             this.hyperparameterSets = new ArrayList<> ();
@@ -134,10 +136,29 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             this.maximizeEvalMetric = maximizeEvalMetric;
         }
 
-        abstract protected Map<String, Object> chooseNextHyperparameters(final double lastScore);
+        abstract protected Map<String, Object> chooseNextHyperparameters();
 
-        
+        Map<String, Object> getBestParameters(final Map<String, Object> classifierParameters, final DMatrix trainMatrix,
+                                              final TrainTestSplit[] splits, final int maxTrainingRounds,
+                                              final int earlyStoppingRounds) {
+            Map<String, Object> bestParameters = null;
+            double bestScore = maximizeEvalMetric ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+            for(int i = 0; i < numSamples; ++i) {
+                final Map<String, Object> hyperparameters = chooseNextHyperparameters();
+                // need to store classifierParameters, update with hyperparameters
+                classifierParameters.putAll(hyperparameters);
+                final double score = getTrainingScore(classifierParameters, trainMatrix, splits, maxTrainingRounds,
+                        earlyStoppingRounds, maximizeEvalMetric);
+                if(maximizeEvalMetric ? score > bestScore : score < bestScore) {
+                    bestScore = score;
+                    bestParameters = classifierParameters;
+                }
+            }
+            return bestParameters;
+        }
+    }
 
+    class RandomClassifierTuner extends ClassifierTuner {
 
     }
 
@@ -197,7 +218,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
                 }
                 return samples;
             }
-            final double delta = Math.pow(high / low, 1.0 / (numSamples - 1);
+            final double delta = Math.pow(high / low, 1.0 / (numSamples - 1));
             double val = low;
             final int[] permutation = getRandomPermutation(random, numSamples);
             samples[permutation[0]] = low;
@@ -264,7 +285,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
                 }
                 return samples;
             }
-            final double delta = Math.pow(high / low, 1.0 / (numSamples - 1);
+            final double delta = Math.pow(high / low, 1.0 / (numSamples - 1));
             double val = low;
             final int[] permutation = getRandomPermutation(random, numSamples);
             samples[permutation[0]] = low;
@@ -452,23 +473,27 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
                                                          final ClassifierTuningStrategy classifierTuningStrategy,
                                                          final DMatrix trainMatrix, final int[] stratify,
                                                          final int numCrossvalidationFolds, final int maxTrainingRounds,
-                                                         final int earlyStoppingRounds, final boolean maximizeEvalMetric) {
+                                                         final int earlyStoppingRounds, final boolean maximizeEvalMetric,
+                                                         final int numTuningSamples) {
         final List<TrainTestSplit> splits = new ArrayList<>();
         TrainTestSplit.getCrossvalidationSplits(trainMatrix, numCrossvalidationFolds, random, stratify)
                 .forEachRemaining(splits::add);
+
+        final ClassifierTuner classifierTuner;
         switch(classifierTuningStrategy) {
             case RANDOM:
-
+                classifierTuner = new RandomClassifierTuner(tuneClassifierParameters, numTuningSamples, maximizeEvalMetric);
 
             default:
                 throw new IllegalStateException("Invalid ClassifierTuningStrategy: " + classifierTuningStrategy);
         }
 
+        return classifierTuner.getBestParameters(classifierParameters, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds);
 
     }
 
 
-    private void setTrainingScore(final Map<String, Object> classifierParameters,
+    private double getTrainingScore(final Map<String, Object> classifierParameters,
                                   final DMatrix trainMatrix, final TrainTestSplit[] splits,
                                   final int maxTrainingRounds, final int earlyStoppingRounds,
                                   final boolean maximizeEvalMetric) {
@@ -506,8 +531,8 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             }
         }
 
-        classifierParameters.put("training_score", bestTotalScore);
         classifierParameters.put("training_rounds", numTrainingRounds);
+        return trainingScore;
     }
 
 
