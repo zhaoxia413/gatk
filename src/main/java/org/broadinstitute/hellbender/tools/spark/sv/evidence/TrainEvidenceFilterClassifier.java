@@ -1,9 +1,6 @@
 package org.broadinstitute.hellbender.tools.spark.sv.evidence;
 
-import ml.dmlc.xgboost4j.java.Booster;
-import ml.dmlc.xgboost4j.java.DMatrix;
-import ml.dmlc.xgboost4j.java.XGBoost;
-import ml.dmlc.xgboost4j.java.XGBoostError;
+import ml.dmlc.xgboost4j.java.*;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -102,6 +99,14 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             fullName = "max-training-rounds", optional = true)
     private final int maxTrainingRounds = 1000;
 
+    @Argument(doc="When performing cross-validation, use this many folds.",
+            fullName = "num-crossvalidation-folds", optional = true)
+    private final int numCrossvalidationFolds = 5;
+
+    @Argument(doc="When optimizing hyperparameters, search for this many rounds.",
+            fullName = "num-hyperparameter-optimization-rounds", optional = true)
+    private final int numTuningSamples = 100;
+
     @Argument(doc="Use this metric to evaluate performance of the classifier.",
             fullName = "eval-metric", optional = true)
     private final String evalMetric = "logloss";
@@ -114,6 +119,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             fullName = "random-seed", optional = true)
     private final Long seed = 0L;
 
+    private static String NUM_TRAINING_ROUNDS = "n_training_rounds";
 
     enum ClassifierTuningStrategy { RANDOM }
 
@@ -139,19 +145,25 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         abstract protected Map<String, Object> chooseNextHyperparameters();
 
         Map<String, Object> getBestParameters(final Map<String, Object> classifierParameters, final DMatrix trainMatrix,
-                                              final TrainTestSplit[] splits, final int maxTrainingRounds,
+                                              final List<TrainTestSplit> splits, final int maxTrainingRounds,
                                               final int earlyStoppingRounds) {
             Map<String, Object> bestParameters = null;
             double bestScore = maximizeEvalMetric ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
             for(int i = 0; i < numSamples; ++i) {
                 final Map<String, Object> hyperparameters = chooseNextHyperparameters();
-                // need to store classifierParameters, update with hyperparameters
-                classifierParameters.putAll(hyperparameters);
-                final double score = getTrainingScore(classifierParameters, trainMatrix, splits, maxTrainingRounds,
-                        earlyStoppingRounds, maximizeEvalMetric);
-                if(maximizeEvalMetric ? score > bestScore : score < bestScore) {
+                hyperparameterSets.add(hyperparameters);
+                final Map<String, Object> testParameters = new HashMap<>(classifierParameters);
+                testParameters.putAll(hyperparameters);
+                localLogger.info("new hyperparameters: " + hyperparameters.toString());
+                final double score = getTrainingScore(testParameters, trainMatrix, splits, maxTrainingRounds,
+                                                      earlyStoppingRounds, maximizeEvalMetric);
+                localLogger.info("\tscore = " + score);
+                hyperparameterScores.add(score);
+                if((maximizeEvalMetric ? score > bestScore : score < bestScore)
+                        || (score == bestScore && (int)testParameters.get(NUM_TRAINING_ROUNDS) < (int)bestParameters.get(NUM_TRAINING_ROUNDS))) {
                     bestScore = score;
-                    bestParameters = classifierParameters;
+                    bestParameters = testParameters;
+                    localLogger.info(("best parameters: " + bestParameters.toString()));
                 }
             }
             return bestParameters;
@@ -159,6 +171,28 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
     }
 
     class RandomClassifierTuner extends ClassifierTuner {
+        private final Map<String, Object[]> randomParameters;
+        RandomClassifierTuner(final Map<String, ClassifierParamRange<?>> tuneParameters, final int numSamples,
+                              final boolean maximizeEvalMetric) {
+            super(tuneParameters, numSamples, maximizeEvalMetric);
+            randomParameters = tuneParameters.entrySet().stream().collect(
+                Collectors.toMap(
+                    Map.Entry::getKey,
+                    x -> x.getValue().getRandomSamples(random, numSamples)
+                )
+            );
+        }
+
+        @Override
+        protected Map<String, Object> chooseNextHyperparameters() {
+            final int index = hyperparameterScores.size();
+            return randomParameters.entrySet().stream().collect(
+                Collectors.toMap(
+                    Map.Entry::getKey,
+                    x -> x.getValue()[index]
+                )
+            );
+        }
 
     }
 
@@ -250,7 +284,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
                 }
                 return samples;
             }
-            final double delta = (high - low) / (numSamples - 1);
+            final double delta = (high - low) / (double)(numSamples - 1);
             double val = low;
             final int[] permutation = getRandomPermutation(random, numSamples);
             samples[permutation[0]] = low;
@@ -281,11 +315,11 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             final Integer[] samples = new Integer[numSamples];
             if(numSamples < 2) {
                 if(numSamples == 1) {
-                    samples[0] = (int)Math.round(Math.sqrt(high * low));
+                    samples[0] = (int)Math.round(Math.sqrt((double)high * low));
                 }
                 return samples;
             }
-            final double delta = Math.pow(high / low, 1.0 / (numSamples - 1));
+            final double delta = Math.pow(high / (double)low, 1.0 / (numSamples - 1));
             double val = low;
             final int[] permutation = getRandomPermutation(random, numSamples);
             samples[permutation[0]] = low;
@@ -332,20 +366,29 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             }
         };
 
+        // specify tunable parameters
+        @SuppressWarnings("serial")
+        Map<String, ClassifierParamRange<?>> tuneClassifierParameters = new HashMap<String, ClassifierParamRange<?>>() {
+            {
+                put("eta", new ClassifierLogParamRange(0.01, 1.0));
+                put("max_depth", new ClassifierIntegerLinearParamRange(2, 10));
+            }
+        };
+
         localLogger.info("Setting watches");
         // specify data sets to evaluate
         @SuppressWarnings("serial")
         Map<String, DMatrix> watches = new HashMap<String, DMatrix> () {
             {
-                put("train", trainMatrix);
                 put("test", testMatrix);
             }
         };
 
         localLogger.info("Fitting training data");
         final Booster booster;
+        float[][] metrics = new float[1][maxTrainingRounds];
         try {
-            booster = XGBoost.train(trainMatrix, classifierParameters, maxTrainingRounds, watches, null, null);
+            booster = XGBoost.train(trainMatrix, classifierParameters, maxTrainingRounds, watches, metrics, null, null, earlyStoppingRounds);
         } catch (XGBoostError err) {
             throw new GATKException(err.getMessage());
         }
@@ -367,6 +410,17 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         for(int index = 0; index < trainingTrace.length; ++index) {
             localLogger.info(index + ": " + trainingTrace[index]);
         }
+
+        final int[] stratify;
+        try {
+            stratify = uniqueLabels(trainMatrix.getLabel());
+        } catch(XGBoostError err) {
+            throw new GATKException(err.getMessage());
+        }
+        final Map<String, Object> bestClassifierParameters = tuneClassifierParameters(
+                classifierParameters, tuneClassifierParameters, classifierTuningStrategy, trainMatrix, stratify,
+                numCrossvalidationFolds, maxTrainingRounds, earlyStoppingRounds, maximizeEvalMetric, numTuningSamples);
+        localLogger.info("bestClassifierParameters: " + bestClassifierParameters.toString());
     }
 
     private DMatrix loadDMatrix(final String dataPath) {
@@ -413,11 +467,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
     }
 
     private static int[] getRange(final int numElements) {
-        final int[] range = new int[numElements];
-        for(int i = 0; i < numElements; ++i) {
-            range[i] = i;
-        }
-        return range;
+        return IntStream.range(0, numElements).toArray();
     }
 
     private static int[] slice(final int[] arr, final int[] indices) {
@@ -446,10 +496,40 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         return ArrayUtils.toPrimitive(sortIndices);
     }
 
+    private static <T> int[] uniqueLabels(final T[] arr) {
+        int[] labels = new int[arr.length];
+        Map<T, Integer> values = new HashMap<>();
+        for(int i = 0; i < arr.length; ++i) {
+            final T value = arr[i];
+            if(values.containsKey(value)) {
+                labels[i] = values.get(value);
+            } else {
+                labels[i] = values.size();
+                values.put(value, values.size());
+            }
+        }
+        return labels;
+    }
+
+    private static int[] uniqueLabels(final float[] arr) {
+        int[] labels = new int[arr.length];
+        Map<Float, Integer> values = new HashMap<>();
+        for(int i = 0; i < arr.length; ++i) {
+            final float value = arr[i];
+            if(values.containsKey(value)) {
+                labels[i] = values.get(value);
+            } else {
+                labels[i] = values.size();
+                values.put(value, values.size());
+            }
+        }
+        return labels;
+    }
+
     private static int[] getRandomPermutation(final Random random, final int numElements) {
         // Knuth shuffle
         final int[] permutation = getRange(numElements);
-        for(int i = numElements; i > 0; --i) {
+        for(int i = numElements - 1; i > 0; --i) {
             final int swap_ind = random.nextInt(i);
             final int swap_val = permutation[swap_ind];
             permutation[swap_ind] = permutation[i];
@@ -475,7 +555,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
                                                          final int numCrossvalidationFolds, final int maxTrainingRounds,
                                                          final int earlyStoppingRounds, final boolean maximizeEvalMetric,
                                                          final int numTuningSamples) {
-        final List<TrainTestSplit> splits = new ArrayList<>();
+        final List<TrainTestSplit> splits = new ArrayList<>(numCrossvalidationFolds);
         TrainTestSplit.getCrossvalidationSplits(trainMatrix, numCrossvalidationFolds, random, stratify)
                 .forEachRemaining(splits::add);
 
@@ -483,7 +563,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         switch(classifierTuningStrategy) {
             case RANDOM:
                 classifierTuner = new RandomClassifierTuner(tuneClassifierParameters, numTuningSamples, maximizeEvalMetric);
-
+                break;
             default:
                 throw new IllegalStateException("Invalid ClassifierTuningStrategy: " + classifierTuningStrategy);
         }
@@ -494,7 +574,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
 
 
     private double getTrainingScore(final Map<String, Object> classifierParameters,
-                                  final DMatrix trainMatrix, final TrainTestSplit[] splits,
+                                  final DMatrix trainMatrix, final List<TrainTestSplit> splits,
                                   final int maxTrainingRounds, final int earlyStoppingRounds,
                                   final boolean maximizeEvalMetric) {
         final float[][] trainingTraces = getCrossvalidatedTrainingTraces(
@@ -531,19 +611,19 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             }
         }
 
-        classifierParameters.put("training_rounds", numTrainingRounds);
+        classifierParameters.put(NUM_TRAINING_ROUNDS, numTrainingRounds);
         return trainingScore;
     }
 
 
     private float[][] getCrossvalidatedTrainingTraces(final Map<String, Object> classifierParameters,
-                                                      final DMatrix trainMatrix, final TrainTestSplit[] splits,
+                                                      final DMatrix trainMatrix, final List<TrainTestSplit> splits,
                                                       final int maxTrainingRounds, final int earlyStoppingRounds,
                                                       final boolean maximizeEvalMetric) {
-        final int numCrossvalidationFolds = splits.length;
+        final int numCrossvalidationFolds = splits.size();
         float[][] trainingTraces = new float[numCrossvalidationFolds][];
         for(int fold = 0; fold < numCrossvalidationFolds; ++fold) {
-            final TrainTestSplit split = splits[fold];
+            final TrainTestSplit split = splits.get(fold);
             try {
                 trainingTraces[fold] = getTrainingTrace(
                         classifierParameters, trainMatrix.slice(split.trainRows), trainMatrix.slice(split.testRows),
@@ -552,7 +632,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             } catch(XGBoostError err) {
                 throw new GATKException(err.getMessage());
             }
-
+            localLogger.info("Got trace fold " + fold);
         }
         return trainingTraces;
     }
@@ -570,10 +650,12 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         int stopRound = earlyStoppingRounds;
         try {
             Map<String, DMatrix> watches = new HashMap<> ();
+            localLogger.info("Create booster. numTrainRows = " + trainMatrix.rowNum() + ", numTestRows = " + testMatrix.rowNum());
             final Booster booster = XGBoost.train(trainMatrix, classifierParameters, 1, watches, null, null);
             booster.evalSet(evalMatrices, evalNames, 0, metricsOut);
             trainingTrace[0] = metricsOut[0];
             bestTraceValue = trainingTrace[0];
+            localLogger.info("training");
             for(int trainingRound = 1; trainingRound < maxTrainingRounds; ++trainingRound) {
                 booster.update(trainMatrix, trainingRound);
                 booster.evalSet(evalMatrices, evalNames, trainingRound, metricsOut);
@@ -587,6 +669,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
                     for(int setIndex = trainingRound + 1; setIndex < maxTrainingRounds; ++setIndex) {
                         trainingTrace[setIndex] = trainingTrace[trainingRound];
                     }
+                    localLogger.info("Early stopping at round " + trainingRound);
                     break;
                 }
             }
@@ -701,26 +784,26 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
 
             @Override
             public TrainTestSplit next() {
-                final int numTrain = (split_index_ordering.length - 1 - fold) / numFolds;
-                final int numTest = split_index_ordering.length - numTrain;
-                int[] trainRows = new int[numTrain];
+                final int numTest = (split_index_ordering.length - 1 - fold) / numFolds;
+                final int numTrain = split_index_ordering.length - numTest;
                 int[] testRows = new int[numTest];
-                int testIndex;
+                int[] trainRows = new int[numTrain];
+                int trainIndex;
                 int orderingIndex;
                 if(fold > 0) {
-                    for(testIndex = 0; testIndex < fold; ++testIndex) {
-                        testRows[testIndex] = split_index_ordering[testIndex];
+                    for(trainIndex = 0; trainIndex < fold; ++trainIndex) {
+                        trainRows[trainIndex] = split_index_ordering[trainIndex];
                     }
-                    orderingIndex = testIndex;
+                    orderingIndex = trainIndex;
                 } else {
                     orderingIndex = 0;
-                    testIndex = 0;
+                    trainIndex = 0;
                 }
-                for(int trainIndex = 0; trainIndex < trainRows.length; ++trainIndex) {
-                    trainRows[trainIndex] = split_index_ordering[orderingIndex];
+                for(int testIndex = 0; testIndex < testRows.length; ++testIndex) {
+                    testRows[testIndex] = split_index_ordering[orderingIndex];
                     final int orderingStop = Math.min(orderingIndex + numFolds, split_index_ordering.length);
-                    for(++orderingIndex; orderingIndex < orderingStop; ++orderingIndex, ++testIndex) {
-                        testRows[testIndex] = split_index_ordering[orderingIndex];
+                    for(++orderingIndex; orderingIndex < orderingStop; ++orderingIndex, ++trainIndex) {
+                        trainRows[trainIndex] = split_index_ordering[orderingIndex];
                     }
                 }
 
