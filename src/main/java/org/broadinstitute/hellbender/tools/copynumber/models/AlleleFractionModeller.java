@@ -120,7 +120,7 @@ public final class AlleleFractionModeller {
     }
 
     /**
-     * Adds {@code numSamples - numBurnIn} Markov-Chain Monte-Carlo samples of the parameter posteriors (generated using
+     * Adds {@code numTuningRounds - numBurnIn} Markov-Chain Monte-Carlo samples of the parameter posteriors (generated using
      * Gibbs sampling) to the collections held internally.  The current {@link AlleleFractionState} held internally is used
      * to initialize the Markov Chain.
      * @param numSamples    total number of samples per posterior

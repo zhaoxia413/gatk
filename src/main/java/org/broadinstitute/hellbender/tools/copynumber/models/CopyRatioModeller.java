@@ -102,7 +102,7 @@ public final class CopyRatioModeller {
     }
 
     /**
-     * Adds {@code numSamples - numBurnIn} Markov-Chain Monte-Carlo samples of the parameter posteriors (generated using
+     * Adds {@code numTuningRounds - numBurnIn} Markov-Chain Monte-Carlo samples of the parameter posteriors (generated using
      * Gibbs sampling) to the collections held internally.  The current {@link CopyRatioState} held internally is used
      * to initialize the Markov Chain.
      * @param numSamples    total number of samples per posterior
