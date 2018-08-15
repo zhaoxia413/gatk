@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools.spark.sv.evidence;
 
 import ml.dmlc.xgboost4j.java.*;
+import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -135,9 +136,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
     @Override
     protected void runTool(final JavaSparkContext ctx) {
         localLogger.info("Loading demo data");
-        final XGBoostUtils.GATKDMatrix trainMatrix = XGBoostUtils.loadSvmFile(demoDataDir + "/train.svm.txt");
-        final XGBoostUtils.GATKDMatrix testMatrix = XGBoostUtils.loadSvmFile(demoDataDir + "/test.svm.txt");
-        // To-do: set scalePosWeight
+        final RealMatrix dataMatrix = MachineLearningUtils.loadCsvFile(demoDataDir + "data.csv.gz");
 
         localLogger.info("Setting fit parameters");
         //specify parameters
@@ -164,64 +163,32 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
             }
         };
 
-        localLogger.info("Setting watches");
-        // specify data sets to evaluate
-        @SuppressWarnings("serial")
-        Map<String, DMatrix> watches = new HashMap<String, DMatrix> () {
-            {
-                put("test", testMatrix.dMatrix);
-            }
-        };
-
         localLogger.info("Fitting training data");
-        final Booster booster;
-        float[][] metrics = new float[1][maxTrainingRounds];
-        try {
-            booster = XGBoost.train(trainMatrix.dMatrix, classifierParameters, maxTrainingRounds, watches, metrics, null, null, earlyStoppingRounds);
-        } catch (XGBoostError err) {
-            throw new GATKException(err.getMessage());
-        }
-
-        localLogger.info("Fitting training data with new interface");
         MachineLearningUtils.GATKClassifier classifier = new XGBoostUtils.GATKXGBooster();
-        classifier.chooseNumThreads(classifierParameters, "nthread", trainMatrix);
+        classifier.chooseNumThreads(classifierParameters, "nthread", dataMatrix);
         localLogger.info("chose nthread = " + (int)classifierParameters.get("nthread"));
         classifierParameters.put(MachineLearningUtils.NUM_TRAINING_ROUNDS_KEY, maxTrainingRounds);
-        classifier.train(classifierParameters, trainMatrix);
+        classifier.train(classifierParameters, dataMatrix);
         classifierParameters.remove(MachineLearningUtils.NUM_TRAINING_ROUNDS_KEY);
 
 
         localLogger.info("Predicting class labels on test data");
         //final float[] predictedTestLabels = predictLabel(booster, testMatrix);
-        final int[] predictedTestLabels = classifier.predictClassLabels(testMatrix);
+        final int[] predictedTestLabels = classifier.predictClassLabels(dataMatrix);
 
         localLogger.info("Calculating prediction accuracy");
-        final double accuracy = predictionAccuracy(predictedTestLabels, testMatrix.getClassLabels());
+        final double accuracy = MachineLearningUtils.getPredictionAccuracy(
+                predictedTestLabels, MachineLearningUtils.getClassLabels(dataMatrix)
+        );
         localLogger.info("Accuracy predicted on test set = " + accuracy);
 
-        final float[] trainingTrace = classifier.trainAndReturnQualityTrace(classifierParameters, trainMatrix, testMatrix,
-                maxTrainingRounds, earlyStoppingRounds, maximizeEvalMetric);
-        localLogger.info("trainingTrace:");
-        for(int index = 0; index < trainingTrace.length; ++index) {
-            localLogger.info(index + ": " + trainingTrace[index]);
-        }
-
-        final int[] stratify = trainMatrix.getClassLabels();
+        final int[] stratify = MachineLearningUtils.getClassLabels(dataMatrix);
         final Map<String, Object> bestClassifierParameters = classifier.tuneClassifierParameters(
                 classifierParameters, tuneClassifierParameters, MachineLearningUtils.ClassifierTuningStrategy.RANDOM,
-                trainMatrix, random, stratify, numCrossvalidationFolds, maxTrainingRounds, earlyStoppingRounds,
+                dataMatrix, random, stratify, numCrossvalidationFolds, maxTrainingRounds, earlyStoppingRounds,
                 numTuningRounds, maximizeEvalMetric
         );
         localLogger.info("bestClassifierParameters: " + bestClassifierParameters.toString());
     }
 
-    private static double predictionAccuracy(final int[] predictedLabels, final int[] correctLabels) {
-        int numCorrect = 0;
-        for(int row = 0; row < correctLabels.length; ++row) {
-            if(predictedLabels[row] == correctLabels[row]) {
-                ++numCorrect;
-            }
-        }
-        return numCorrect / (double)correctLabels.length;
-    }
 }

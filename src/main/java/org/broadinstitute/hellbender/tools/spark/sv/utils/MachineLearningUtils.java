@@ -1,51 +1,113 @@
 package org.broadinstitute.hellbender.tools.spark.sv.utils;
 
+import htsjdk.samtools.util.IOUtil;
 import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.math3.linear.Array2DRowRealMatrix;
+import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public class MachineLearningUtils {
+    public static FSTObjectOutput foo;
     public static final String NUM_TRAINING_ROUNDS_KEY = "num_training_rounds";
-    public static final int NUM_CALIBRATION_TRAINING_ROUNDS = 500;
-    public static final int NUM_CALIBRATION_CLASS_ROWS = 500;
-    static final Logger localLogger = LogManager.getLogger(MachineLearningUtils.class);
+    public static final int DEFAULT_NUM_CROSSVALIDATION_FOLDS = 5;
+    public static final int DEFAULT_NUM_TUNING_ROUNDS = 100;
+
+    private static final int NUM_CALIBRATION_TRAINING_ROUNDS = 500;
+    private static final int NUM_CALIBRATION_CLASS_ROWS = 500;
+    public static final int CLASS_LABEL_COLUMN = 0;
+    private static final Logger localLogger = LogManager.getLogger(MachineLearningUtils.class);
+
+    public static Array2DRowRealMatrix loadCsvFile(final String filename) {
+        return loadCsvFile(filename, ",", "#", CLASS_LABEL_COLUMN);
+    }
 
     /**
-     * Interface for matrix holding classification problem data with one row per data point and one column per feature.
-     * Class labels are also stored in this object.
+     * Load matrix from (possibly gzipped) csv file. Note: the first column of said
+     * @param filename
+     * @return
      */
-    public interface GATKMatrix {
-        /**
-         *  return new matrix constructed from provided subset of rows
-         * @param rowIndices array of indices to desired rows
-         * @return
-         */
-        public GATKMatrix sliceRows(final int[] rowIndices);
+    public static Array2DRowRealMatrix loadCsvFile(final String filename, final String delimiter,
+                                                   final String commentCharacter, final int classLabelsColumn) {
+        final int numColumns;
+        final List<double[]> rowsList;
+        try (final BufferedReader reader = IOUtil.openFileForBufferedReading(new File(filename))) {
+            rowsList = new ArrayList<>();
+            if(!reader.ready()) {
+                throw new GATKException("Unable to read matrix from " + filename);
+            }
+            rowsList.add(getNextCsvFeaturesRow(reader, delimiter, commentCharacter, classLabelsColumn));
+            numColumns = rowsList.get(0).length;
+            while(reader.ready()) {
+                final double[] features = getNextCsvFeaturesRow(reader, delimiter, commentCharacter, classLabelsColumn);
+                if(features.length != numColumns) {
+                    throw new GATKException("filename does not encode a matrix, rows do not all have the same length");
+                }
+                rowsList.add(features);
+            }
+        } catch(IOException err) {
+            throw new GATKException(err.getMessage());
+        }
+        return new Array2DRowRealMatrix(rowsList.toArray(new double[0][]), false);
+    }
+
+    private static double[] getNextCsvFeaturesRow(final BufferedReader reader, final String delimiter,
+                                                  final String commentCharacter, final int classLabelsColumn) throws IOException {
+        String line = reader.readLine();
+        while(line.startsWith(commentCharacter) || line.isEmpty()) {
+            line = reader.readLine();
+        }
+        final String[] words = line.split(delimiter, -1);
+        final double[] features = Arrays.stream(words).mapToDouble(Double::valueOf).toArray();
+        if(classLabelsColumn != CLASS_LABEL_COLUMN) {
+            final double temp = features[classLabelsColumn];
+            features[classLabelsColumn] = features[CLASS_LABEL_COLUMN];
+            features[CLASS_LABEL_COLUMN] = temp;
+        }
+        return features;
+    }
+
+    public static RealMatrix sliceRows(final RealMatrix matrix, final int[] sliceRows) {
+        final int[] allColumns = getRange(matrix.getColumnDimension());
+        return matrix.getSubMatrix(sliceRows, allColumns);
+    }
 
 
-        public int getNumRows();
-        public int[] getClassLabels();
+    public static int[] getClassLabels(final RealMatrix matrix) {
+        return getClassLabels(matrix, CLASS_LABEL_COLUMN);
+    }
+
+    public static int[] getClassLabels(final RealMatrix matrix, final int classLabelColumn) {
+        final int numRows = matrix.getRowDimension();
+        final int[] classLabels = new int[numRows];
+        for(int row = 0; row < numRows; ++row) {
+            classLabels[row] = (int)Math.round(matrix.getEntry(row, classLabelColumn));
+        }
+        return classLabels;
     }
 
     public static abstract class GATKClassifier {
         // train classifier. Note, function should return "this"
         public abstract GATKClassifier train(final Map<String, Object> classifierParameters,
-                                             final GATKMatrix trainingMatrix);
+                                             final RealMatrix trainingMatrix);
 
         public abstract float[] trainAndReturnQualityTrace(
-                final Map<String, Object> classifierParameters, final GATKMatrix trainingMatrix,
-                final GATKMatrix evaluationMatrix, final int maxTrainingRounds, final int earlyStoppingRounds,
+                final Map<String, Object> classifierParameters, final RealMatrix trainingMatrix,
+                final RealMatrix evaluationMatrix, final int maxTrainingRounds, final int earlyStoppingRounds,
                 final boolean maximizeEvalMetric);
 
-        public abstract float[][] predictProbability(final GATKMatrix matrix);
+        public abstract float[][] predictProbability(final RealMatrix matrix);
 
-        public int[] predictClassLabels(final GATKMatrix matrix) {
-            final float [][] predictedProbabilities;
-            predictedProbabilities = predictProbability(matrix);
+        public int[] predictClassLabels(final RealMatrix matrix) {
+            final float [][] predictedProbabilities = predictProbability(matrix);
             final int [] predictedLabels = new int[predictedProbabilities.length];
             if(predictedProbabilities.length == 0) {
                 return predictedLabels;
@@ -67,21 +129,21 @@ public class MachineLearningUtils {
         }
 
         public void chooseNumThreads(final Map<String, Object> classifierParameters, final String numThreadsKey,
-                                     final GATKMatrix trainingMatrix) {
+                                     final RealMatrix trainingMatrix) {
             final int numCalibrationRows = NUM_CALIBRATION_CLASS_ROWS * 2;
             localLogger.info("numCalibrationRows = " + numCalibrationRows);
-            localLogger.info("numTrainingRows = " + trainingMatrix.getNumRows());
-            final GATKMatrix calibrationMatrix;
-            if(trainingMatrix.getNumRows() <= numCalibrationRows) {
+            localLogger.info("numTrainingRows = " + trainingMatrix.getRowDimension());
+            final RealMatrix calibrationMatrix;
+            if(trainingMatrix.getRowDimension() <= numCalibrationRows) {
                 calibrationMatrix = trainingMatrix;
             } else {
-                localLogger.info("trainingFraction = " + numCalibrationRows / (float)trainingMatrix.getNumRows());
+                final int[] stratify = getClassLabels(trainingMatrix);
+                localLogger.info("trainingFraction = " + numCalibrationRows / (float)trainingMatrix.getRowDimension());
                 final TrainTestSplit trainTestSplit = TrainTestSplit.getTrainTestSplit(trainingMatrix,
-                        numCalibrationRows / (float)trainingMatrix.getNumRows(), new Random(),
-                        trainingMatrix.getClassLabels());
+                        numCalibrationRows / (float)trainingMatrix.getRowDimension(), new Random(), stratify);
                 localLogger.info("numTrain = " + trainTestSplit.trainRows.length);
                 localLogger.info("numTest = " + trainTestSplit.testRows.length);
-                calibrationMatrix = trainingMatrix.sliceRows(trainTestSplit.trainRows);
+                calibrationMatrix = sliceRows(trainingMatrix, trainTestSplit.trainRows);
             }
             final Map<String, Object> calibrationParams = new HashMap<>(classifierParameters);
             calibrationParams.put(NUM_TRAINING_ROUNDS_KEY, NUM_CALIBRATION_TRAINING_ROUNDS);
@@ -104,14 +166,14 @@ public class MachineLearningUtils {
 
         }
 
-        private long getTrainingTime(final Map<String, Object> classifierParameters, final XGBoostUtils.GATKMatrix trainingMatrix) {
+        private long getTrainingTime(final Map<String, Object> classifierParameters, final RealMatrix trainingMatrix) {
             final long startTime = System.nanoTime();
             train(classifierParameters, trainingMatrix);
             return System.nanoTime() - startTime;
         }
 
         private float[][] getCrossvalidatedTrainingTraces(final Map<String, Object> classifierParameters,
-                                                          final GATKMatrix trainMatrix, final List<TrainTestSplit> splits,
+                                                          final RealMatrix trainMatrix, final List<TrainTestSplit> splits,
                                                           final int maxTrainingRounds, final int earlyStoppingRounds,
                                                           final boolean maximizeEvalMetric) {
             final int numCrossvalidationFolds = splits.size();
@@ -119,8 +181,8 @@ public class MachineLearningUtils {
             for(int fold = 0; fold < numCrossvalidationFolds; ++fold) {
                 final TrainTestSplit split = splits.get(fold);
                 trainingTraces[fold] = trainAndReturnQualityTrace(
-                        classifierParameters, trainMatrix.sliceRows(split.trainRows),
-                        trainMatrix.sliceRows(split.testRows), maxTrainingRounds, earlyStoppingRounds,
+                        classifierParameters, sliceRows(trainMatrix, split.trainRows),
+                        sliceRows(trainMatrix, split.testRows), maxTrainingRounds, earlyStoppingRounds,
                         maximizeEvalMetric
                 );
             }
@@ -167,7 +229,7 @@ public class MachineLearningUtils {
         public Map<String, Object> tuneClassifierParameters(final Map<String, Object> classifierParameters,
                                                             final Map<String, ClassifierParamRange<?>> tuneClassifierParameters,
                                                             final ClassifierTuningStrategy classifierTuningStrategy,
-                                                            final GATKMatrix trainMatrix, final Random random,
+                                                            final RealMatrix trainMatrix, final Random random,
                                                             final int[] stratify, final int numCrossvalidationFolds,
                                                             final int maxTrainingRounds, final int earlyStoppingRounds,
                                                             final int numTuningRounds, final boolean maximizeEvalMetric) {
@@ -189,9 +251,27 @@ public class MachineLearningUtils {
             return classifierTuner.getBestParameters(classifierParameters, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds);
 
         }
+
+        public int[] crossvalidatePredict(final RealMatrix dataMatrix, final Map<String, Object> classifierParameters,
+                                          final Random random, final int[] stratify, final int numCrossvalidationFolds) {
+            final int[] predictedLabels = new int[dataMatrix.getRowDimension()];
+            final Iterator<TrainTestSplit> splitIterator = TrainTestSplit.getCrossvalidationSplits(
+                    dataMatrix, numCrossvalidationFolds, random, stratify
+            );
+            while(splitIterator.hasNext()) {
+                final TrainTestSplit split = splitIterator.next();
+                // train on training data from this crossvalidation split
+                train(classifierParameters, sliceRows(dataMatrix, split.trainRows));
+                // predict on testing data from this split
+                final int[] predictedTestLabels = predictClassLabels(sliceRows(dataMatrix, split.testRows));
+                // and assign those values into the final predictions
+                sliceAssign(predictedLabels, split.testRows, predictedTestLabels);
+            }
+            return predictedLabels;
+        }
     }
 
-    static class TrainTestSplit {
+    public static class TrainTestSplit {
         final int[] trainRows;
         final int[] testRows;
 
@@ -200,9 +280,9 @@ public class MachineLearningUtils {
             this.testRows = testRows;
         }
 
-        static TrainTestSplit getTrainTestSplit(final GATKMatrix trainMatrix, final double trainingFraction,
-                                                final Random random, final int[] stratify) {
-            final int numRows = trainMatrix.getNumRows();
+        public static TrainTestSplit getTrainTestSplit(final RealMatrix trainMatrix, final double trainingFraction,
+                                                       final Random random, final int[] stratify) {
+            final int numRows = trainMatrix.getRowDimension();
             if(stratify != null && stratify.length != numRows) {
                 throw new IllegalArgumentException("stratify.length (" + stratify.length + ") not equal to num rows ("
                         + numRows + ")");
@@ -241,16 +321,18 @@ public class MachineLearningUtils {
                     ++nextTestInd;
                 }
             }
+            Arrays.sort(trainRows);
+            Arrays.sort(testRows);
             return new TrainTestSplit(trainRows, testRows);
         }
 
-        static Iterator<TrainTestSplit> getCrossvalidationSplits(final GATKMatrix trainMatrix,
+        public static Iterator<TrainTestSplit> getCrossvalidationSplits(final RealMatrix trainMatrix,
                                                                  final int numCrossvalidationFolds,
                                                                  final Random random, final int[] stratify) {
             if(numCrossvalidationFolds < 2) {
                 throw new IllegalArgumentException("numCrossvalidationFolds (" + numCrossvalidationFolds + ") must be >= 2");
             }
-            final int numRows = stratify == null ? trainMatrix.getNumRows() : stratify.length;
+            final int numRows = stratify == null ? trainMatrix.getRowDimension() : stratify.length;
             final int[] split_index_ordering = stratify == null ?
                     getRandomPermutation(random, numRows)
                     : TrainTestSplit.getStratfiedIndexOrdering(random, stratify);
@@ -318,6 +400,8 @@ public class MachineLearningUtils {
                 }
 
                 ++fold;
+                Arrays.sort(trainRows);
+                Arrays.sort(testRows);
                 return new TrainTestSplit(trainRows, testRows);
             }
         }
@@ -350,7 +434,7 @@ public class MachineLearningUtils {
         abstract protected Map<String, Object> chooseNextHyperparameters();
 
         Map<String, Object> getBestParameters(final Map<String, Object> classifierParameters,
-                                              final GATKMatrix trainMatrix, final List<TrainTestSplit> splits,
+                                              final RealMatrix trainMatrix, final List<TrainTestSplit> splits,
                                               final int maxTrainingRounds, final int earlyStoppingRounds) {
             Map<String, Object> bestParameters = null;
             double bestScore = maximizeEvalMetric ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
@@ -359,14 +443,11 @@ public class MachineLearningUtils {
                 hyperparameterSets.add(hyperparameters);
                 final Map<String, Object> testParameters = new HashMap<>(classifierParameters);
                 testParameters.putAll(hyperparameters);
-                final double score = classifier.getTrainingScore(
-                        testParameters,
-                        classifier.getCrossvalidatedTrainingTraces(
-                                testParameters, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds,
-                                maximizeEvalMetric
-                        ),
+                final float[][] trainingTraces = classifier.getCrossvalidatedTrainingTraces(
+                        testParameters, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds,
                         maximizeEvalMetric
                 );
+                final double score = classifier.getTrainingScore(testParameters, trainingTraces, maximizeEvalMetric);
                 hyperparameterScores.add(score);
                 // This is the new best score if a) it is better than the previous best score so far -OR-
                 //                               b) it exactly ties the best score, but uses fewer rounds of training
@@ -558,12 +639,18 @@ public class MachineLearningUtils {
         return IntStream.range(0, numElements).toArray();
     }
 
-    private static int[] slice(final int[] arr, final int[] indices) {
+    public static int[] slice(final int[] arr, final int[] indices) {
         final int[] sliced_arr = new int[indices.length];
         for(int i = 0; i < indices.length; ++i) {
             sliced_arr[i] = arr[indices[i]];
         }
         return sliced_arr;
+    }
+
+    public static void sliceAssign(final int[] arr, final int[] indices, final int[] newValues) {
+        for(int i = 0; i < indices.length; ++i) {
+            arr[indices[i]] = newValues[i];
+        }
     }
 
     private static int argmax(final float[] arr) {
@@ -624,6 +711,16 @@ public class MachineLearningUtils {
             permutation[i] = swap_val;
         }
         return permutation;
+    }
+
+    public static double getPredictionAccuracy(final int[] predictedLabels, final int[] correctLabels) {
+        int numCorrect = 0;
+        for(int row = 0; row < correctLabels.length; ++row) {
+            if(predictedLabels[row] == correctLabels[row]) {
+                ++numCorrect;
+            }
+        }
+        return numCorrect / (double)correctLabels.length;
     }
 }
 

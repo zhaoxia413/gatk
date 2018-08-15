@@ -5,59 +5,98 @@ import ml.dmlc.xgboost4j.java.Booster;
 import ml.dmlc.xgboost4j.java.DMatrix;
 import ml.dmlc.xgboost4j.java.XGBoost;
 import ml.dmlc.xgboost4j.java.XGBoostError;
+import org.apache.commons.math3.linear.RealMatrix;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 
 public class XGBoostUtils extends MachineLearningUtils {
-    public static GATKDMatrix loadSvmFile(final String fileName) {
+    public static final String LEARNING_RATE_KEY = "eta";
+    public static final double DEFAULT_LEARNING_RATE = 0.5;
+    public static final String MAX_DEPTH_KEY = "max_depth";
+    public static final String GAMMA_KEY = "gamma";
+    public static final String MIN_CHILD_WEIGHT_KEY = "min_child_weight";
+    public static final String SUBSAMPLE_KEY = "subsample";
+    public static final String COLSAMPLE_BY_TREE_KEY = "colsample_by_tree";
+    public static final String COLSAMPLE_BY_LEVEL_KEY = "colsample_by_level";
+    public static final String MAX_DELTA_STEP_KEY = "max_delta_step";
+
+    public static final int DEFAULT_MAX_DEPTH = 6;
+    public static final String SILENT_KEY = "silent";
+    public static final int DEFAULT_SILENT = 1;
+    public static final String OBJECTIVE_KEY = "objective";
+    public static final String DEFAULT_OBJECTIVE_VALUE = "binary:logistic";
+    public static final String EVAL_METRIC_KEY = "eval_metric";
+    public static final String DEFAULT_EVAL_METRIC = "auc";
+    public static final String NUM_THREADS_KEY = "nthread";
+    public static final String SCALE_POS_WEIGHT_KEY = "scale_pos_weight";
+    public static final String SEED_KEY = "seed";
+    public static final int DEFAULT_SEED = 0;
+    public static final int DEFAULT_NUM_TRAINING_ROUNDS = 1000;
+    public static final int DEFAULT_EARLY_STOPPING_ROUNDS = 50;
+    @SuppressWarnings("serial")
+    public static final Map<String, Object> DEFAULT_CLASSIFIER_PARAMETERS = new HashMap<String, Object>() {
+        {
+            put(MachineLearningUtils.NUM_TRAINING_ROUNDS_KEY, DEFAULT_NUM_TRAINING_ROUNDS);
+
+            put(LEARNING_RATE_KEY, DEFAULT_LEARNING_RATE);
+            put(MAX_DEPTH_KEY, DEFAULT_MAX_DEPTH);
+
+            put(OBJECTIVE_KEY, DEFAULT_OBJECTIVE_VALUE);
+            put(EVAL_METRIC_KEY, DEFAULT_EVAL_METRIC);
+
+            put(SILENT_KEY, DEFAULT_SILENT);
+            put(SEED_KEY, DEFAULT_SEED);
+        }
+    };
+    @SuppressWarnings("serial")
+    public static final Map<String, MachineLearningUtils.ClassifierParamRange<?>> DEFAULT_TUNING_PARAMETERS
+            = new HashMap<String, MachineLearningUtils.ClassifierParamRange<?>>() {
+        {
+            put(LEARNING_RATE_KEY, new MachineLearningUtils.ClassifierLogParamRange(0.01, 10.0));
+            put(MAX_DEPTH_KEY, new MachineLearningUtils.ClassifierIntegerLinearParamRange(2, 20));
+            put(GAMMA_KEY, new MachineLearningUtils.ClassifierLinearParamRange(0.0, 20.0));
+            put(MIN_CHILD_WEIGHT_KEY, new MachineLearningUtils.ClassifierLogParamRange(1.0, 100.0));
+            put(SUBSAMPLE_KEY, new MachineLearningUtils.ClassifierLinearParamRange(0.5, 1.0));
+            put(COLSAMPLE_BY_TREE_KEY, new MachineLearningUtils.ClassifierLinearParamRange(0.5, 1.0));
+            put(COLSAMPLE_BY_LEVEL_KEY, new MachineLearningUtils.ClassifierLinearParamRange(0.5, 1.0));
+            put(MAX_DELTA_STEP_KEY, new MachineLearningUtils.ClassifierLinearParamRange(0.0, 10.0));
+        }
+    };
+
+    public static DMatrix loadSvmFile(final String fileName) {
         try {
-            return new GATKDMatrix(new DMatrix(fileName));
+            return new DMatrix(fileName);
         } catch(XGBoostError err) {
             throw new GATKException(err.getMessage());
         }
     }
 
-    public static class GATKDMatrix implements GATKMatrix {
-        public final DMatrix dMatrix;
-
-        GATKDMatrix(final DMatrix dMatrix) {
-            this.dMatrix = dMatrix;
-        }
-
-        @Override
-        public GATKDMatrix sliceRows(final int[] rowIndices) {
-            try {
-                return new GATKDMatrix(dMatrix.slice(rowIndices));
-            } catch(XGBoostError err) {
-                throw new GATKException(err.getMessage());
+    static DMatrix realMatrixToDMatrix(final RealMatrix realMatrix) {
+        final int numRows = realMatrix.getRowDimension();
+        final int numColumns = realMatrix.getColumnDimension();
+        final int numDataColumns = numColumns  - 1;
+        final int numData = numRows * numDataColumns;
+        final float[] values = new float[numData];
+        final float[] classLabels = new float[numRows];
+        int index = 0;
+        for(int row = 0; row < numRows; ++row) {
+            for(int column = 0; column < numColumns; ++column) {
+                if(column == MachineLearningUtils.CLASS_LABEL_COLUMN) {
+                    classLabels[row] = (float) realMatrix.getEntry(row, column);
+                } else {
+                    values[index] = (float) realMatrix.getEntry(row, column);
+                    ++index;
+                }
             }
         }
-
-        @Override
-        public int getNumRows() {
-            try {
-                return (int)dMatrix.rowNum();
-            } catch(XGBoostError err) {
-                throw new GATKException(err.getMessage());
-            }
-        }
-
-        @Override
-        public int[] getClassLabels() {
-            final float[] floatClassLabels;
-            try {
-                floatClassLabels = dMatrix.getLabel();
-            } catch(XGBoostError err) {
-                throw new GATKException(err.getMessage());
-            }
-            final int[] classLabels = new int[floatClassLabels.length];
-            for(int i = 0; i < classLabels.length; ++i) {
-                classLabels[i] = (int)floatClassLabels[i];
-            }
-            return classLabels;
+        try {
+            DMatrix dMatrix = new DMatrix(values, numRows, numDataColumns, Float.NaN);
+            dMatrix.setLabel(classLabels);
+            return dMatrix;
+        } catch(XGBoostError err) {
+            throw new GATKException(err.getMessage());
         }
     }
 
@@ -68,12 +107,8 @@ public class XGBoostUtils extends MachineLearningUtils {
             this.booster = null;
         }
 
-        public GATKXGBooster(final Booster booster) {
-            this.booster = booster;
-        }
-
         @Override
-        public GATKClassifier train(final Map<String, Object> classifierParameters, final GATKMatrix trainingMatrix) {
+        public GATKClassifier train(final Map<String, Object> classifierParameters, final RealMatrix trainingMatrix) {
             // specify data sets to evaluate
             Map<String, DMatrix> watches = new HashMap<>();
 
@@ -87,8 +122,13 @@ public class XGBoostUtils extends MachineLearningUtils {
             final int numTrainingRounds = (int)trainingParams.get(NUM_TRAINING_ROUNDS_KEY);
             trainingParams.remove(NUM_TRAINING_ROUNDS_KEY);
 
+            if(!trainingParams.containsKey(SCALE_POS_WEIGHT_KEY)) {
+                final int numPositiveClass = Arrays.stream(getClassLabels(trainingMatrix)).sum();
+                trainingParams.put(SCALE_POS_WEIGHT_KEY,
+                                   (trainingMatrix.getRowDimension() - numPositiveClass) / (float)numPositiveClass);
+            }
             try {
-                booster = XGBoost.train(((GATKDMatrix)trainingMatrix).dMatrix, trainingParams, numTrainingRounds,
+                booster = XGBoost.train(realMatrixToDMatrix(trainingMatrix), trainingParams, numTrainingRounds,
                                         watches, null, null);
             } catch (XGBoostError err) {
                 throw new GATKException(err.getMessage());
@@ -98,12 +138,12 @@ public class XGBoostUtils extends MachineLearningUtils {
 
         @Override
         public float[] trainAndReturnQualityTrace(
-                final Map<String, Object> classifierParameters, final GATKMatrix trainingMatrix,
-                final GATKMatrix evaluationMatrix, final int maxTrainingRounds, final int earlyStoppingRounds,
+                final Map<String, Object> classifierParameters, final RealMatrix trainingMatrix,
+                final RealMatrix evaluationMatrix, final int maxTrainingRounds, final int earlyStoppingRounds,
                 final boolean maximizeEvalMetric
         ) {
-            final DMatrix trainingDMatrix = ((GATKDMatrix)trainingMatrix).dMatrix;
-            final DMatrix[] evalMatrices = {((GATKDMatrix)evaluationMatrix).dMatrix};
+            final DMatrix trainingDMatrix = realMatrixToDMatrix(trainingMatrix);
+            final DMatrix[] evalMatrices = {realMatrixToDMatrix(evaluationMatrix)};
             final String[] evalNames = {"test"};
             final float[] metricsOut = new float[1];
             final float[] trainingTrace = new float [maxTrainingRounds];
@@ -138,9 +178,9 @@ public class XGBoostUtils extends MachineLearningUtils {
         }
 
         @Override
-        public float[][] predictProbability(final GATKMatrix matrix) {
+        public float[][] predictProbability(final RealMatrix matrix) {
             try {
-                return booster.predict(((GATKDMatrix) matrix).dMatrix);
+                return booster.predict(realMatrixToDMatrix(matrix));
             } catch(XGBoostError err) {
                 throw new GATKException(err.getMessage());
             }
