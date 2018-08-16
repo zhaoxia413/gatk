@@ -5,7 +5,8 @@ import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
-import java.util.HashMap;
+import java.io.File;
+import java.io.IOException;
 import java.util.Map;
 import java.util.Random;
 
@@ -36,7 +37,7 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
     }
 
     @Test(groups = "sv")
-    protected void testBasicTrain() {
+    protected void testBasicTrain() throws IOException {
         // check that a classifier can be trained from data
         classifier.train(CLASSIFIER_PARAMS, TEST_MATRIX);
 
@@ -46,6 +47,28 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
         // check that the predictions match the data (this data is easy to predict, they should)
         assertLabelsEqual(predictedLabels, MachineLearningUtils.getClassLabels(TEST_MATRIX),
                 "Predicted labels not identical to actual labels");
+
+        // predict probabilities of whole matrix
+        final float[][] probabilities = classifier.predictProbability(TEST_MATRIX);
+        // check that you get indentical results when predicting row-by-row
+        for(int row = 0; row < TEST_MATRIX.getRowDimension(); ++row) {
+            final float[] rowProbability = classifier.predictProbability(TEST_MATRIX.getRow(row));
+            assertArrayEquals(rowProbability, probabilities[row], 0,
+                    "Row " + row + ": different probabilities predicted for matrix and row-by-row");
+        }
+
+        // save classifier to temporary file
+        File tempFile = File.createTempFile("gatk-xgboost-classifier", "kryo");
+        classifier.save(tempFile.getAbsolutePath());
+        // load classifier from temporary file
+
+        final MachineLearningUtils.GATKClassifier loadedClassifier = MachineLearningUtils.GATKClassifier.load(
+                tempFile.getAbsolutePath()
+        );
+        // check that you get identical results to first probability predictions
+        final float[][] loadedProbabilities = loadedClassifier.predictProbability(TEST_MATRIX);
+        assertMatrixEquals(loadedProbabilities, probabilities, 0.0,
+                "Probabilities predicted by loaded classifier not equal to original");
     }
 
     @Test(groups = "sv")
@@ -100,5 +123,21 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
         Assert.assertTrue(accuracy >= MINIMUM_ALLOWED_CROSSVALIDATED_ACCURACY,
                 "Crossvalidated prediction accuracy (" + accuracy + ") less than passing ("
                         + MINIMUM_ALLOWED_CROSSVALIDATED_ACCURACY + ")");
+    }
+
+    private static void assertArrayEquals(final float[] actuals, final float[] expecteds, final double tol,
+                                          final String message) {
+        Assert.assertEquals(actuals.length, expecteds.length, "Lengths not equal: " + message);
+        for(int index = 0; index < expecteds.length; ++index) {
+            Assert.assertEquals(actuals[index], expecteds[index], tol, "at index=" + index + ": " + message);
+        }
+    }
+
+    private static void assertMatrixEquals(final float[][] actuals, final float[][] expecteds, final double tol,
+                                           final String message) {
+        Assert.assertEquals(actuals.length, expecteds.length, "Number of rows not equal: " + message);
+        for(int index = 0; index < expecteds.length; ++index) {
+            assertArrayEquals(actuals[index], expecteds[index], tol, "at row=" + index + ": " + message);
+        }
     }
 }

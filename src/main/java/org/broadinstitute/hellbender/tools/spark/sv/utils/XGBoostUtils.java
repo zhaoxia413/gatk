@@ -1,13 +1,20 @@
 package org.broadinstitute.hellbender.tools.spark.sv.utils;
 
 
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.io.Input;
+import com.esotericsoftware.kryo.io.Output;
 import ml.dmlc.xgboost4j.java.Booster;
 import ml.dmlc.xgboost4j.java.DMatrix;
 import ml.dmlc.xgboost4j.java.XGBoost;
 import ml.dmlc.xgboost4j.java.XGBoostError;
+import org.apache.commons.collections4.map.HashedMap;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.*;
 
 
@@ -65,12 +72,17 @@ public class XGBoostUtils extends MachineLearningUtils {
         }
     };
 
-    public static DMatrix loadSvmFile(final String fileName) {
+    public static Booster getBooster() {
+        final Booster booster;
         try {
-            return new DMatrix(fileName);
+            final DMatrix dMatrix = new DMatrix(new float[0], 0, 0);
+            final Map<String, Object> params = new HashMap<>();
+            final Map<String, DMatrix> watches = new HashedMap<>();
+            booster = XGBoost.train(dMatrix, params, 0, watches, null, null);
         } catch(XGBoostError err) {
             throw new GATKException(err.getMessage());
         }
+        return booster;
     }
 
     static DMatrix realMatrixToDMatrix(final RealMatrix realMatrix) {
@@ -105,6 +117,25 @@ public class XGBoostUtils extends MachineLearningUtils {
 
         public GATKXGBooster() {
             this.booster = null;
+        }
+
+        public void write(Kryo kryo, Output output) {
+            final byte[] bytearray;
+            try {
+                bytearray = booster == null ? null : booster.toByteArray();
+            } catch(XGBoostError err) {
+                throw new GATKException(err.getMessage());
+            }
+            kryo.writeObjectOrNull(output, bytearray, byte[].class);
+        }
+
+        public void read(Kryo kryo, Input input) {
+            final byte[] bytearray = kryo.readObjectOrNull(input, byte[].class);
+            try {
+                booster = bytearray == null ? null : XGBoost.loadModel(new ByteArrayInputStream(bytearray));
+            } catch(XGBoostError | IOException err) {
+                throw new GATKException(err.getMessage());
+            }
         }
 
         @Override

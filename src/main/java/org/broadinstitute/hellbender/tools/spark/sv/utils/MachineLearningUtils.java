@@ -1,5 +1,9 @@
 package org.broadinstitute.hellbender.tools.spark.sv.utils;
 
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.KryoSerializable;
+import com.esotericsoftware.kryo.io.Input;
+import com.esotericsoftware.kryo.io.Output;
 import htsjdk.samtools.util.IOUtil;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
@@ -8,15 +12,12 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public class MachineLearningUtils {
-    public static FSTObjectOutput foo;
     public static final String NUM_TRAINING_ROUNDS_KEY = "num_training_rounds";
     public static final int DEFAULT_NUM_CROSSVALIDATION_FOLDS = 5;
     public static final int DEFAULT_NUM_TUNING_ROUNDS = 100;
@@ -94,7 +95,9 @@ public class MachineLearningUtils {
         return classLabels;
     }
 
-    public static abstract class GATKClassifier {
+    public static abstract class GATKClassifier implements Serializable, KryoSerializable {
+        private final double[][] singlePredictWrapper = new double [1][];
+
         // train classifier. Note, function should return "this"
         public abstract GATKClassifier train(final Map<String, Object> classifierParameters,
                                              final RealMatrix trainingMatrix);
@@ -105,6 +108,12 @@ public class MachineLearningUtils {
                 final boolean maximizeEvalMetric);
 
         public abstract float[][] predictProbability(final RealMatrix matrix);
+
+        public float[] predictProbability(final double[] featureVector) {
+            singlePredictWrapper[0] = featureVector;
+            final RealMatrix matrix = new Array2DRowRealMatrix(singlePredictWrapper, false);
+            return (predictProbability(matrix)[0]);
+        }
 
         public int[] predictClassLabels(final RealMatrix matrix) {
             final float [][] predictedProbabilities = predictProbability(matrix);
@@ -126,6 +135,33 @@ public class MachineLearningUtils {
                 }
             }
             return predictedLabels;
+        }
+
+        public void save(final String saveFilePath) throws IOException {
+            try(FileOutputStream fileOutputStream = new FileOutputStream(saveFilePath)) {
+                save(fileOutputStream);
+            }
+        }
+
+        public void save(final FileOutputStream fileOutputStream) {
+            final Kryo kryo = new Kryo();
+            final Output output = new Output(fileOutputStream);
+            kryo.writeClassAndObject(output, this);
+            output.close();
+        }
+
+        public static GATKClassifier load(final String saveFilePath) throws IOException {
+            try(FileInputStream fileInputStream = new FileInputStream(saveFilePath)) {
+                return load(fileInputStream);
+            }
+        }
+
+        public static GATKClassifier load(final FileInputStream fileInputStream) {
+            final Kryo kryo = new Kryo();
+            final Input input = new Input(fileInputStream);
+            final GATKClassifier classifier = (GATKClassifier)kryo.readClassAndObject(input);
+            input.close();
+            return classifier;
         }
 
         public void chooseNumThreads(final Map<String, Object> classifierParameters, final String numThreadsKey,
@@ -627,7 +663,10 @@ public class MachineLearningUtils {
         }
     }
 
-    private static Integer[] getRange(final Integer numElements) {
+    public static Integer[] getRange(final Integer numElements) {
+        if(numElements < 0) {
+            throw new IllegalArgumentException("numElements must be >= 0");
+        }
         final Integer[] range = new Integer[numElements];
         for(Integer i = 0; i < numElements; ++i) {
             range[i] = i;
@@ -635,7 +674,10 @@ public class MachineLearningUtils {
         return range;
     }
 
-    private static int[] getRange(final int numElements) {
+    public static int[] getRange(final int numElements) {
+        if(numElements < 0) {
+            throw new IllegalArgumentException("numElements must be >= 0");
+        }
         return IntStream.range(0, numElements).toArray();
     }
 
@@ -648,6 +690,9 @@ public class MachineLearningUtils {
     }
 
     public static void sliceAssign(final int[] arr, final int[] indices, final int[] newValues) {
+        if(indices.length != newValues.length) {
+            throw new IllegalArgumentException("length of indices does not match length of newValues");
+        }
         for(int i = 0; i < indices.length; ++i) {
             arr[indices[i]] = newValues[i];
         }
@@ -665,7 +710,7 @@ public class MachineLearningUtils {
         return bestIndex;
     }
 
-    private static int[] argsort(final int[] arr) {
+    public static int[] argsort(final int[] arr) {
         final Integer[] sortIndices = getRange((Integer)arr.length);
         Arrays.sort(sortIndices, Comparator.comparingInt(ind -> arr[ind]));
         return ArrayUtils.toPrimitive(sortIndices);
@@ -701,7 +746,7 @@ public class MachineLearningUtils {
         return labels;
     }
 
-    private static int[] getRandomPermutation(final Random random, final int numElements) {
+    public static int[] getRandomPermutation(final Random random, final int numElements) {
         // Knuth shuffle
         final int[] permutation = getRange(numElements);
         for(int i = numElements - 1; i > 0; --i) {
