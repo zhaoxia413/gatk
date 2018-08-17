@@ -3,7 +3,6 @@ package org.broadinstitute.hellbender.tools.walkers.mutect;
 import htsjdk.samtools.util.OverlapDetector;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.VariantContext;
-import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
 import org.apache.commons.math3.distribution.BinomialDistribution;
 import org.broadinstitute.hellbender.tools.walkers.annotator.*;
@@ -11,7 +10,6 @@ import org.broadinstitute.hellbender.tools.walkers.contamination.ContaminationRe
 import org.broadinstitute.hellbender.tools.walkers.contamination.MinorAlleleFractionRecord;
 import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
-import org.broadinstitute.hellbender.utils.variant.GATKVariant;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -79,34 +77,34 @@ public class Mutect2FilteringEngine {
         }
     }
 
-    private void applyDiscordantMatesFilter(final VariantContext vc, final VariantContextBuilder vcb) {
+    private void applyDiscordantMatesFilter(final VariantContext vc, final FilterResult filterResult) {
         Genotype tumorGenotype = vc.getGenotype(tumorSample);
         if (tumorGenotype.hasAnyAttribute("NON_MT_OA") & vc.isBiallelic()) {
             int[] nonMtOa = GATKProtectedVariantContextUtils.getAttributeAsIntArray(tumorGenotype, "NON_MT_OA", () -> null, -1);
             int[] ad = tumorGenotype.getAD();
             if ((double) nonMtOa[1] / ad[1] > .85) {
-                vcb.filter(GATKVCFConstants.NON_MT_READS);
+                filterResult.addFilter(GATKVCFConstants.NON_MT_READS);
             }
         }
     }
 
-private void applyAFFilter(final VariantContext vc, final VariantContextBuilder vcb) {
+private void applyAFFilter(final VariantContext vc, final FilterResult filterResult) {
         Genotype tumorGenotype = vc.getGenotype(tumorSample);
         if (vc.isBiallelic()) {
             double af = Double.parseDouble((String) tumorGenotype.getAnyAttribute(GATKVCFConstants.ALLELE_FRACTION_KEY));
             if (af < .008) {
-                vcb.filter(GATKVCFConstants.LOW_ALLELE_FRACTION_NAME);
+                filterResult.addFilter(GATKVCFConstants.LOW_ALLELE_FRACTION_NAME);
             }
         }
     }
 
-    private void applyTLODDFilter(final VariantContext vc, final VariantContextBuilder vcb) {
+    private void applyTLODDFilter(final VariantContext vc, final FilterResult filterResult) {
         if(vc.isBiallelic()) {
             Double TLOD = vc.getAttributeAsDouble("TLOD", 1);
             Double depth = vc.getAttributeAsDouble("DP", 1);
             Double TLODD = TLOD / depth;
             if (TLODD < .005) {
-                vcb.filter(GATKVCFConstants.LOW_TLODD_NAME);
+                filterResult.addFilter(GATKVCFConstants.LOW_TLODD_NAME);
             }
         }
     }
@@ -370,9 +368,9 @@ private void applyAFFilter(final VariantContext vc, final VariantContextBuilder 
         applyClusteredEventFilter(vc, filterResult);
         applyDuplicatedAltReadFilter(MTFAC, vc, filterResult);
         applyTriallelicFilter(vc, filterResult);
-	applyDiscordantMatesFilter(vc, filterResult);
-	applyAFFilter(vc, vcb);
-	applyTLODDFilter(vc, vcb);
+	    applyDiscordantMatesFilter(vc, filterResult);
+	    applyAFFilter(vc, filterResult);
+	    applyTLODDFilter(vc, filterResult);
         applyPanelOfNormalsFilter(MTFAC, vc, filterResult);
         applyGermlineVariantFilter(MTFAC, vc, filterResult);
         applyArtifactInNormalFilter(MTFAC, vc, filterResult);
