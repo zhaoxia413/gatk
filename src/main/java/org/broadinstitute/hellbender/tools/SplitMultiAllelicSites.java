@@ -102,20 +102,19 @@ public class SplitMultiAllelicSites extends VariantWalker {
 
             // since the VC has been subset, remove the invalid attributes
             for ( final String key : variant.getAttributes().keySet() ) {
-                if ( !(key.equals(VCFConstants.ALLELE_COUNT_KEY) || key.equals(VCFConstants.ALLELE_FREQUENCY_KEY) || key.equals(VCFConstants.ALLELE_NUMBER_KEY))) {
-                    builder.rmAttribute(key);
-                }
+                builder.rmAttribute(key);
             }
 
             // subset INFO field annotations if available if genotype is called
             addInfoFiledAnnotations(variant, builder, alt, true);
 
-                    builder.genotypes(subsetAlleles(variant, alleles, GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL));
-                    final VariantContext trimmed = GATKVariantContextUtils.trimAlleles(builder.make(), false, true);
-                    biallelics.add(trimmed);
+            builder.genotypes(subsetAlleles(variant, alleles, GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL));
+            final VariantContext trimmed = GATKVariantContextUtils.trimAlleles(builder.make(), false, true);
+            biallelics.add(trimmed);
         }
 
         for(VariantContext vc : biallelics) {
+
             vcfWriter.add(vc);
         }
     }
