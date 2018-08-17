@@ -106,7 +106,7 @@ public class SplitMultiAllelicSites extends VariantWalker {
             }
 
             // subset INFO field annotations if available if genotype is called
-            addInfoFiledAnnotations(variant, builder, alt, true);
+            //addInfoFiledAnnotations(variant, builder, alt, true);
 
             builder.genotypes(subsetAlleles(variant, alleles, GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL));
             final VariantContext trimmed = GATKVariantContextUtils.trimAlleles(builder.make(), false, true);
