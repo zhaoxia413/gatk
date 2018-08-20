@@ -372,7 +372,7 @@ private void applyAFFilter(final VariantContext vc, final FilterResult filterRes
         applyDuplicatedAltReadFilter(MTFAC, vc, filterResult);
         applyTriallelicFilter(vc, filterResult);
 	    applyDiscordantMatesFilter(vc, filterResult);
-	    applyAFFilter(vc, filterResult);
+	    //applyAFFilter(vc, filterResult);
 	    applyTLODDFilter(vc, filterResult);
         applyPanelOfNormalsFilter(MTFAC, vc, filterResult);
         applyGermlineVariantFilter(MTFAC, vc, filterResult);
