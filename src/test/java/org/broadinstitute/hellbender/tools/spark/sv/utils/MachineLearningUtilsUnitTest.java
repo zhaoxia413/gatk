@@ -1,15 +1,12 @@
 package org.broadinstitute.hellbender.tools.spark.sv.utils;
 
-import org.apache.commons.lang3.ArrayUtils;
 import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
-import javax.crypto.Mac;
-import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 
 public class MachineLearningUtilsUnitTest extends GATKBaseTest {
@@ -22,6 +19,19 @@ public class MachineLearningUtilsUnitTest extends GATKBaseTest {
     private static final int NUM_CROSSVALIDATION_FOLDS = 5;
     // choose an arbitrary large value in between 1 and NUM_ELEMENTS_TEST
     private static final int NUM_STRATIFY_CLASSES = (int)Math.round(Math.sqrt(NUM_ELEMENTS_TEST));
+    // choose arbitrary number of ClassifierParamRange samples to test
+    private static final int NUM_PARAM_RANGE_SAMPLES = 60;
+    // choose arbitrary ranges to test over
+    private static final double LINEAR_LOW = -1.0;
+    private static final double LINEAR_HIGH = 1.0;
+    private static final double LOG_LOW = 0.1;
+    private static final double LOG_HIGH = 10.0;
+    private static final int LINEAR_INT_LOW = -100;
+    private static final int LINEAR_INT_HIGH = 100;
+    private static final int LOG_INT_LOW = 1;
+    private static final int LOG_INT_HIGH = 100;
+    private static final double RANGE_EPS = 1.0 + 1.0e-16;
+    private static final double[] CHECK_RANGE_BALANCE_PROPORTION = new double[] {0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
 
     @Test(groups = "sv")
     protected void testGetRange() {
@@ -237,6 +247,140 @@ public class MachineLearningUtilsUnitTest extends GATKBaseTest {
         }
     }
 
+    @Test(groups = "sv")
+    /**
+     * Test expected behavior of ParamRange subclasses.
+     * Basic functionality is tested in actual use of tuning / cross-validating. Here check that the details match
+     * expectations (getRandomSamples returns randomly-ordered samples from range, evenly spaced linearly or logarithmically,
+     * with different param ranges scrambled independently, and of the appropriate data type).
+     */
+    protected void testParamRanges() {
+        final Double[] linearSamples = new MachineLearningUtils.ClassifierLinearParamRange(
+                LINEAR_LOW, LINEAR_HIGH
+        ).getRandomSamples(random, NUM_PARAM_RANGE_SAMPLES);
+        final Double[] logSamples = new MachineLearningUtils.ClassifierLogParamRange(
+                LOG_LOW, LOG_HIGH
+        ).getRandomSamples(random, NUM_PARAM_RANGE_SAMPLES);
+        final Integer[] linearIntSamples = new MachineLearningUtils.ClassifierIntegerLinearParamRange(
+                LINEAR_INT_LOW, LINEAR_INT_HIGH
+        ).getRandomSamples(random, NUM_PARAM_RANGE_SAMPLES);
+        final Integer[] logIntSamples = new MachineLearningUtils.ClassifierIntegerLogParamRange(
+                LOG_INT_LOW, LOG_INT_HIGH
+        ).getRandomSamples(random, NUM_PARAM_RANGE_SAMPLES);
+
+        // check ranges have appropriate min and max
+        assertArrayEquals(
+                new double[] {Arrays.stream(linearSamples).min(Double::compare).get(), Arrays.stream(linearSamples).max(Double::compare).get()},
+                new double[] {LINEAR_LOW, LINEAR_HIGH},
+                "linearSamples have incorrect range"
+        );
+        assertArrayEquals(
+                new double[] {Arrays.stream(logSamples).min(Double::compare).get(), Arrays.stream(logSamples).max(Double::compare).get()},
+                new double[] {LOG_LOW, LOG_HIGH},
+                "logSamples have incorrect range"
+        );
+        assertArrayEquals(
+                new int[] {Arrays.stream(linearIntSamples).min(Integer::compare).get(), Arrays.stream(linearIntSamples).max(Integer::compare).get()},
+                new int[] {LINEAR_INT_LOW, LINEAR_INT_HIGH},
+                "linearIntSamples have incorrect range"
+        );
+        assertArrayEquals(
+                new int[] {Arrays.stream(logIntSamples).min(Integer::compare).get(), Arrays.stream(logIntSamples).max(Integer::compare).get()},
+                new int[] {LOG_INT_LOW, LOG_INT_HIGH},
+                "logIntSamples have incorrect range"
+        );
+
+        // check ranges are sampled uniformly
+        for(final double checkProportion : CHECK_RANGE_BALANCE_PROPORTION) {
+            final double linearDivider = LINEAR_LOW + plusEpsilon(LINEAR_HIGH - LINEAR_LOW) * checkProportion;
+            assertEvenParamRange(linearSamples, linearDivider, checkProportion);
+            final double logDivider = LOG_LOW * Math.pow(plusEpsilon(LOG_HIGH / LOG_LOW), checkProportion);
+            assertEvenParamRange(logSamples, logDivider, checkProportion);
+            final double linearIntDivider = LINEAR_INT_LOW + plusEpsilon(LINEAR_INT_HIGH - LINEAR_INT_LOW) * checkProportion;
+            assertEvenParamRange(linearIntSamples, linearIntDivider, checkProportion);
+            final double logIntDivider = LOG_INT_LOW * Math.pow(plusEpsilon(LOG_INT_HIGH / (double)LOG_INT_LOW), checkProportion);
+            assertEvenParamRange(logIntSamples, logIntDivider, checkProportion);
+        }
+
+        // check ranges do not co-vary, permutations should be distinct
+        final int[] linearPermutation = MachineLearningUtils.argsort(linearSamples);
+        final int[] logPermutation = MachineLearningUtils.argsort(logSamples);
+        final int[] linearIntPermutation = MachineLearningUtils.argsort(linearIntSamples);
+        final int[] logIntPermutation = MachineLearningUtils.argsort(logIntSamples);
+        assertArraysNotEqual(linearPermutation, logPermutation, "Permuations repeated, parameter space will not be evenly sampled");
+        assertArraysNotEqual(linearPermutation, linearIntPermutation, "Permuations repeated, parameter space will not be evenly sampled");
+        assertArraysNotEqual(linearPermutation, logIntPermutation, "Permuations repeated, parameter space will not be evenly sampled");
+        assertArraysNotEqual(logPermutation, linearIntPermutation, "Permuations repeated, parameter space will not be evenly sampled");
+        assertArraysNotEqual(logPermutation, logIntPermutation, "Permuations repeated, parameter space will not be evenly sampled");
+        assertArraysNotEqual(linearIntPermutation, logIntPermutation, "Permuations repeated, parameter space will not be evenly sampled");
+
+        // check InvalidArguments
+        assertBadParamRangeThrowsException(LINEAR_HIGH, LINEAR_LOW, MachineLearningUtils.ClassifierLinearParamRange.class,
+                IllegalArgumentException.class, "ClassifierParamRange with low > high should throw IllegalArgumentException");
+        assertBadParamRangeThrowsException(LOG_HIGH, LOG_LOW, MachineLearningUtils.ClassifierLogParamRange.class,
+                IllegalArgumentException.class, "ClassifierParamRange with low > high should throw IllegalArgumentException");
+        assertBadParamRangeThrowsException(LINEAR_INT_HIGH, LINEAR_INT_LOW, MachineLearningUtils.ClassifierIntegerLinearParamRange.class,
+                IllegalArgumentException.class, "ClassifierParamRange with low > high should throw IllegalArgumentException");
+        assertBadParamRangeThrowsException(LOG_INT_HIGH, LOG_INT_LOW, MachineLearningUtils.ClassifierIntegerLogParamRange.class,
+                IllegalArgumentException.class, "ClassifierParamRange with low > high should throw IllegalArgumentException");
+        assertBadParamRangeThrowsException(-LOG_HIGH, LOG_LOW, MachineLearningUtils.ClassifierLogParamRange.class,
+                IllegalArgumentException.class, "Log-distributed ClassifierParamRange with low and high of different signs should throw IllegalArgumentException");
+        assertBadParamRangeThrowsException(0.0, LOG_LOW, MachineLearningUtils.ClassifierLogParamRange.class,
+                IllegalArgumentException.class, "Log-distributed ClassifierParamRange with low and high of different signs should throw IllegalArgumentException");
+        assertBadParamRangeThrowsException(-LOG_INT_HIGH, LOG_INT_LOW, MachineLearningUtils.ClassifierIntegerLogParamRange.class,
+                IllegalArgumentException.class, "Log-distributed ClassifierParamRange with low and high of different signs should throw IllegalArgumentException");
+        assertBadParamRangeThrowsException(0, LOG_INT_HIGH, MachineLearningUtils.ClassifierIntegerLogParamRange.class,
+                IllegalArgumentException.class, "Log-distributed ClassifierParamRange with low and high of different signs should throw IllegalArgumentException");
+    }
+
+    private static <R extends MachineLearningUtils.ClassifierParamRange<Double>, E extends Exception>
+    void assertBadParamRangeThrowsException(final Double low, final Double high, Class<R> clazz, Class<E> exceptionClazz,
+                                            final String message) {
+        try {
+            final R foo = clazz.getConstructor(double.class, double.class).newInstance(low, high);
+            Assert.fail(message);
+        } catch(Exception exception) {
+            if(!exceptionClazz.isInstance(exception.getCause())) {
+                // Wrong type, this is an unexpected error
+                throw new GATKException(exception.getClass().getName() + ": " + exception.getCause());
+            }
+        }
+    }
+    private static <R extends MachineLearningUtils.ClassifierParamRange<Integer>, E extends Exception>
+    void assertBadParamRangeThrowsException(final Integer low, final Integer high, Class<R> clazz, Class<E> exceptionClazz,
+                                            final String message) {
+        try {
+            final R foo = clazz.getConstructor(int.class, int.class).newInstance(low, high);
+            Assert.fail(message);
+        } catch(Exception exception) {
+            if(!exceptionClazz.isInstance(exception.getCause())) {
+                // Wrong type, this is an unexpected error
+                throw new GATKException(exception.getClass().getName() + ": " + exception.getCause());
+            }
+        }
+    }
+
+    private static double plusEpsilon(final double x) {
+        return x + 2 * Math.ulp(x);
+    }
+
+    private static void assertEvenParamRange(final Double[] randomSamples, final double divider, final double checkProportion) {
+        final long numLessDivider = Arrays.stream(randomSamples).filter(s -> s < divider).count();
+        final double actualProportion = numLessDivider / (double)randomSamples.length;
+        final double tol = 1.0 / randomSamples.length;
+        Assert.assertEquals(actualProportion, checkProportion, tol, "Proportion of samples below divider deviated from expected");
+    }
+
+    private static void assertEvenParamRange(final Integer[] linearSamples, final double divider, final double checkProportion) {
+        // because of quantization, actual proportion less than divider may vary by quite a bit. Bracket divider and ensure
+        // that proportions bracket checkProportion
+        final long numLessFloorDivider = Arrays.stream(linearSamples).filter(s -> s < (int)Math.floor(divider)).count();
+        final long numLessCeilDivider = Arrays.stream(linearSamples).filter(s -> s <= (int)Math.ceil(divider)).count();
+        final long numExpectedLessDivider = Math.round(checkProportion * linearSamples.length);
+        Assert.assertTrue(numLessFloorDivider <= numExpectedLessDivider && numExpectedLessDivider <= numLessCeilDivider,
+                "Proportion of samples below divider deviated from expected");
+    }
+
     private static void assertEmpty(final int[] arr, final String message) {
         if(arr.length != 0) {
             Assert.fail(message);
@@ -262,6 +406,13 @@ public class MachineLearningUtilsUnitTest extends GATKBaseTest {
     }
 
     private static void assertArrayEquals(final int[] actuals, final int[] expecteds, final String message) {
+        Assert.assertEquals(actuals.length, expecteds.length, "Lengths not equal: " + message);
+        for (int index = 0; index < expecteds.length; ++index) {
+            Assert.assertEquals(actuals[index], expecteds[index], "at index=" + index + ": " + message);
+        }
+    }
+
+    private static void assertArrayEquals(final double[] actuals, final double[] expecteds, final String message) {
         Assert.assertEquals(actuals.length, expecteds.length, "Lengths not equal: " + message);
         for (int index = 0; index < expecteds.length; ++index) {
             Assert.assertEquals(actuals[index], expecteds[index], "at index=" + index + ": " + message);
@@ -335,8 +486,8 @@ public class MachineLearningUtilsUnitTest extends GATKBaseTest {
         }
         final int maxValue = stratifyCountsMap.keySet().stream().mapToInt(Integer::intValue).max().getAsInt();
         final int[] stratifyCounts = new int[maxValue + 1];
-        for(final Map.Entry entry : stratifyCountsMap.entrySet()) {
-            stratifyCounts[(int)(Integer)entry.getKey()] = (int)(Integer)entry.getValue();
+        for(final Map.Entry<Integer, Integer> entry : stratifyCountsMap.entrySet()) {
+            stratifyCounts[entry.getKey()] = entry.getValue();
         }
         return stratifyCounts;
     }

@@ -545,6 +545,9 @@ public class MachineLearningUtils {
         private final double high;
 
         public ClassifierLinearParamRange(double low, double high) {
+            if(low > high) {
+                throw new IllegalArgumentException("low must be <= high");
+            }
             this.low = low;
             this.high = high;
         }
@@ -580,6 +583,9 @@ public class MachineLearningUtils {
             if(low * high <= 0) {
                 throw new IllegalArgumentException("low (" + low + ") and high (" + high + ") must be the same sign, and non-zero");
             }
+            if(low > high) {
+                throw new IllegalArgumentException("low must be <= high");
+            }
             this.low = low;
             this.high = high;
         }
@@ -612,6 +618,9 @@ public class MachineLearningUtils {
         private final int high;
 
         public ClassifierIntegerLinearParamRange(int low, int high) {
+            if(low > high) {
+                throw new IllegalArgumentException("low must be <= high");
+            }
             this.low = low;
             this.high = high;
         }
@@ -646,6 +655,9 @@ public class MachineLearningUtils {
         public ClassifierIntegerLogParamRange(int low, int high) {
             if(low * high <= 0) {
                 throw new IllegalArgumentException("low (" + low + ") and high (" + high + ") must be the same sign, and non-zero");
+            }
+            if(low > high) {
+                throw new IllegalArgumentException("low must be <= high");
             }
             this.low = low;
             this.high = high;
@@ -725,6 +737,12 @@ public class MachineLearningUtils {
     public static int[] argsort(final int[] arr) {
         final Integer[] sortIndices = getRange((Integer)arr.length);
         Arrays.sort(sortIndices, Comparator.comparingInt(ind -> arr[ind]));
+        return ArrayUtils.toPrimitive(sortIndices);
+    }
+
+    public static <T extends Comparable<? super T>> int[] argsort(final T[] arr) {
+        final Integer[] sortIndices = getRange((Integer)arr.length);
+        Arrays.sort(sortIndices, Comparator.comparing(ind -> arr[ind]));
         return ArrayUtils.toPrimitive(sortIndices);
     }
 
