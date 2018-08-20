@@ -143,7 +143,10 @@ private void applyAFFilter(final VariantContext vc, final FilterResult filterRes
 
     private void applyBaseQualityFilter(final M2FiltersArgumentCollection MTFAC, final VariantContext vc, final FilterResult filterResult) {
         final int[] baseQualityByAllele = getIntArrayTumorField(vc, BaseQuality.KEY);
-        if (baseQualityByAllele != null && baseQualityByAllele[0] < MTFAC.minMedianBaseQuality) {
+        final double[] tumorLods = getDoubleArrayAttribute(vc, GATKVCFConstants.TUMOR_LOD_KEY);
+        final int indexOfMaxTumorLod = MathUtils.maxElementIndex(tumorLods);
+
+        if (baseQualityByAllele != null && baseQualityByAllele[indexOfMaxTumorLod + 1] < MTFAC.minMedianBaseQuality) {
             filterResult.addFilter(GATKVCFConstants.MEDIAN_BASE_QUALITY_FILTER_NAME);
         }
     }
