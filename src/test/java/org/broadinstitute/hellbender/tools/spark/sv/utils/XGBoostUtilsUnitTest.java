@@ -76,7 +76,7 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
         final int[] stratify = MachineLearningUtils.getClassLabels(TEST_MATRIX);
 
         final MachineLearningUtils.TrainTestSplit hyperSplit = MachineLearningUtils.TrainTestSplit.getTrainTestSplit(
-                TEST_MATRIX, TUNING_FRACTION, random, stratify
+                TUNING_FRACTION, TEST_MATRIX.getRowDimension(), random, stratify
         );
         final RealMatrix trainMatrix = MachineLearningUtils.sliceRows(TEST_MATRIX, hyperSplit.trainRows);
         final RealMatrix validateMatrix = MachineLearningUtils.sliceRows(TEST_MATRIX, hyperSplit.testRows);
@@ -95,7 +95,7 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
         final int[] stratify = MachineLearningUtils.getClassLabels(TEST_MATRIX);
 
         final MachineLearningUtils.TrainTestSplit hyperSplit = MachineLearningUtils.TrainTestSplit.getTrainTestSplit(
-                TEST_MATRIX, TUNING_FRACTION, random, stratify
+                TUNING_FRACTION, TEST_MATRIX.getRowDimension(), random, stratify
         );
         final RealMatrix tuneMatrix = MachineLearningUtils.sliceRows(TEST_MATRIX, hyperSplit.trainRows);
         final int[] tuneStratify = MachineLearningUtils.slice(stratify, hyperSplit.trainRows);

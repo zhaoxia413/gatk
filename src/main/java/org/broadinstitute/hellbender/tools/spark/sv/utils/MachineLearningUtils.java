@@ -4,6 +4,7 @@ import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.KryoSerializable;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
+import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.util.IOUtil;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
@@ -96,6 +97,8 @@ public class MachineLearningUtils {
     }
 
     public static abstract class GATKClassifier implements Serializable, KryoSerializable {
+        private static final long serialVersionUID = 1L;
+
         private final double[][] singlePredictWrapper = new double [1][];
 
         // train classifier. Note, function should return "this"
@@ -175,8 +178,10 @@ public class MachineLearningUtils {
             } else {
                 final int[] stratify = getClassLabels(trainingMatrix);
                 localLogger.info("trainingFraction = " + numCalibrationRows / (float)trainingMatrix.getRowDimension());
-                final TrainTestSplit trainTestSplit = TrainTestSplit.getTrainTestSplit(trainingMatrix,
-                        numCalibrationRows / (float)trainingMatrix.getRowDimension(), new Random(), stratify);
+                final TrainTestSplit trainTestSplit = TrainTestSplit.getTrainTestSplit(
+                        numCalibrationRows / (float)trainingMatrix.getRowDimension(),
+                        trainingMatrix.getRowDimension(), new Random(), stratify
+                );
                 localLogger.info("numTrain = " + trainTestSplit.trainRows.length);
                 localLogger.info("numTest = " + trainTestSplit.testRows.length);
                 calibrationMatrix = sliceRows(trainingMatrix, trainTestSplit.trainRows);
@@ -270,8 +275,9 @@ public class MachineLearningUtils {
                                                             final int maxTrainingRounds, final int earlyStoppingRounds,
                                                             final int numTuningRounds, final boolean maximizeEvalMetric) {
             final List<TrainTestSplit> splits = new ArrayList<>(numCrossvalidationFolds);
-            TrainTestSplit.getCrossvalidationSplits(trainMatrix, numCrossvalidationFolds, random, stratify)
-                    .forEachRemaining(splits::add);
+            TrainTestSplit.getCrossvalidationSplits(
+                    numCrossvalidationFolds, trainMatrix.getRowDimension(), random, stratify
+            ).forEachRemaining(splits::add);
 
             final ClassifierTuner classifierTuner;
             switch(classifierTuningStrategy) {
@@ -292,7 +298,7 @@ public class MachineLearningUtils {
                                           final Random random, final int[] stratify, final int numCrossvalidationFolds) {
             final int[] predictedLabels = new int[dataMatrix.getRowDimension()];
             final Iterator<TrainTestSplit> splitIterator = TrainTestSplit.getCrossvalidationSplits(
-                    dataMatrix, numCrossvalidationFolds, random, stratify
+                    numCrossvalidationFolds, dataMatrix.getRowDimension(), random, stratify
             );
             while(splitIterator.hasNext()) {
                 final TrainTestSplit split = splitIterator.next();
@@ -316,15 +322,17 @@ public class MachineLearningUtils {
             this.testRows = testRows;
         }
 
-        public static TrainTestSplit getTrainTestSplit(final RealMatrix trainMatrix, final double trainingFraction,
+
+        public static TrainTestSplit getTrainTestSplit(final double trainingFraction, final int numRows,
                                                        final Random random, final int[] stratify) {
-            final int numRows = trainMatrix.getRowDimension();
             if(stratify != null && stratify.length != numRows) {
-                throw new IllegalArgumentException("stratify.length (" + stratify.length + ") not equal to num rows ("
-                        + numRows + ")");
+                throw new IllegalArgumentException(
+                        "stratify.length (" + stratify.length + ") != numRows (" + numRows + ")"
+                );
             }
-            final int numTrain = (int)Math.round(numRows * trainingFraction);
-            final int numTest = numRows - numTrain;
+
+            final long numTrain = Math.round(numRows * trainingFraction);
+            final long numTest = numRows - numTrain;
             if(numTrain <= 0) {
                 if(trainingFraction < 0) {
                     throw new IllegalArgumentException(
@@ -343,17 +351,17 @@ public class MachineLearningUtils {
             final int[] split_index_ordering = stratify == null ?
                     getRandomPermutation(random, numRows)
                     : TrainTestSplit.getStratfiedIndexOrdering(random, stratify);
-            final int[] trainRows = new int[numTrain];
-            final int[] testRows = new int[numTest];
+            final int[] trainRows = new int[(int)numTrain];
+            final int[] testRows = new int[(int)numTest];
             int nextTrainInd = 1;
             int nextTestInd = 1;
-            for(int i = 0; i < numRows; ++i) {
+            for(final int split_index : split_index_ordering) {
                 if(numTrain * nextTestInd >= numTest * nextTrainInd) {
                     // training set gets next index
-                    trainRows[nextTrainInd - 1] = split_index_ordering[i];
+                    trainRows[nextTrainInd - 1] = split_index;
                     ++nextTrainInd;
                 } else {
-                    testRows[nextTestInd - 1] = split_index_ordering[i];
+                    testRows[nextTestInd - 1] = split_index;
                     ++nextTestInd;
                 }
             }
@@ -362,13 +370,16 @@ public class MachineLearningUtils {
             return new TrainTestSplit(trainRows, testRows);
         }
 
-        public static Iterator<TrainTestSplit> getCrossvalidationSplits(final RealMatrix trainMatrix,
-                                                                 final int numCrossvalidationFolds,
-                                                                 final Random random, final int[] stratify) {
+        public static Iterator<TrainTestSplit> getCrossvalidationSplits(final int numCrossvalidationFolds, final int numRows,
+                                                                        final Random random, final int[] stratify) {
             if(numCrossvalidationFolds < 2) {
                 throw new IllegalArgumentException("numCrossvalidationFolds (" + numCrossvalidationFolds + ") must be >= 2");
             }
-            final int numRows = stratify == null ? trainMatrix.getRowDimension() : stratify.length;
+            if(stratify != null && stratify.length != numRows) {
+                throw new IllegalArgumentException(
+                        "stratify.length (" + stratify.length + ") != numRows (" + numRows + ")"
+                );
+            }
             final int[] split_index_ordering = stratify == null ?
                     getRandomPermutation(random, numRows)
                     : TrainTestSplit.getStratfiedIndexOrdering(random, stratify);
@@ -412,7 +423,7 @@ public class MachineLearningUtils {
 
             @Override
             public TrainTestSplit next() {
-                final int numTest = (split_index_ordering.length - 1 - fold) / numFolds;
+                final int numTest = 1 + (split_index_ordering.length - 1 - fold) / numFolds;
                 final int numTrain = split_index_ordering.length - numTest;
                 int[] testRows = new int[numTest];
                 int[] trainRows = new int[numTrain];
@@ -698,7 +709,8 @@ public class MachineLearningUtils {
         }
     }
 
-    private static int argmax(final float[] arr) {
+    @VisibleForTesting
+    static int argmax(final float[] arr) {
         int bestIndex = -1;
         float bestValue = Float.MIN_VALUE;
         for(int index = 0; index < arr.length; ++index) {
@@ -716,35 +728,6 @@ public class MachineLearningUtils {
         return ArrayUtils.toPrimitive(sortIndices);
     }
 
-    private static <T> int[] uniqueLabels(final T[] arr) {
-        int[] labels = new int[arr.length];
-        Map<T, Integer> values = new HashMap<>();
-        for(int i = 0; i < arr.length; ++i) {
-            final T value = arr[i];
-            if(values.containsKey(value)) {
-                labels[i] = values.get(value);
-            } else {
-                labels[i] = values.size();
-                values.put(value, values.size());
-            }
-        }
-        return labels;
-    }
-
-    private static int[] uniqueLabels(final float[] arr) {
-        int[] labels = new int[arr.length];
-        Map<Float, Integer> values = new HashMap<>();
-        for(int i = 0; i < arr.length; ++i) {
-            final float value = arr[i];
-            if(values.containsKey(value)) {
-                labels[i] = values.get(value);
-            } else {
-                labels[i] = values.size();
-                values.put(value, values.size());
-            }
-        }
-        return labels;
-    }
 
     public static int[] getRandomPermutation(final Random random, final int numElements) {
         // Knuth shuffle

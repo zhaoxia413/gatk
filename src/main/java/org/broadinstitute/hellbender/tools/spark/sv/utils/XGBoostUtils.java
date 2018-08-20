@@ -113,6 +113,7 @@ public class XGBoostUtils extends MachineLearningUtils {
     }
 
     public static class GATKXGBooster extends GATKClassifier {
+        private static final long serialVersionUID = 1L;
         private Booster booster;
 
         public GATKXGBooster() {
