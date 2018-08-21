@@ -7,12 +7,14 @@ import com.esotericsoftware.kryo.io.Output;
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.util.IOUtil;
 import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 
+import javax.crypto.Mac;
 import java.io.*;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -314,8 +316,8 @@ public class MachineLearningUtils {
     }
 
     public static class TrainTestSplit {
-        final int[] trainRows;
-        final int[] testRows;
+        public final int[] trainRows;
+        public final int[] testRows;
 
         TrainTestSplit(final int[] trainRows, final int[] testRows) {
             this.trainRows = trainRows;
@@ -485,6 +487,9 @@ public class MachineLearningUtils {
                                               final int maxTrainingRounds, final int earlyStoppingRounds) {
             Map<String, Object> bestParameters = null;
             double bestScore = maximizeEvalMetric ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+
+            MachineLearningUtils.localLogger.info("Getting best parameters");
+            ConsoleProgressBar progress = new ConsoleProgressBar(numTuningRounds);
             for(int i = 0; i < numTuningRounds; ++i) {
                 final Map<String, Object> hyperparameters = chooseNextHyperparameters();
                 hyperparameterSets.add(hyperparameters);
@@ -504,6 +509,7 @@ public class MachineLearningUtils {
                     bestScore = score;
                     bestParameters = testParameters;
                 }
+                progress.update(1);
             }
             return bestParameters;
         }
@@ -683,6 +689,114 @@ public class MachineLearningUtils {
             }
             samples[permutation[numSamples - 1]] = high;
             return samples;
+        }
+    }
+
+    public static class ConsoleProgressBar {
+        private static final long MIN_UPDATE_INTERVAL_NS = 500000000; // = 0.5 sec
+        private static final int NUM_BAR_CHARACTERS = 10;
+
+        private static final double SECONDS_IN_MINUTE = 60.0;
+        private static final long MINUTES_IN_HOUR = 60;
+        private static final long HOURS_IN_DAY = 24;
+        private static final String CARRIAGE_RETURN = "\r";
+
+        private final long workToDo;
+        private final long bornTime;
+        private long nextUpdateTime;
+        private long workDone;
+        private long workRemaining;
+        private int maxOutputLength;
+        private final String updateInfoFormat;
+
+        ConsoleProgressBar(final long workToDo) {
+            if(workToDo <= 0) {
+                throw new IllegalArgumentException("workToDo must be > 0");
+            }
+            this.workToDo = workToDo;
+            workDone = 0;
+            workRemaining = workToDo;
+            bornTime = System.nanoTime();
+            nextUpdateTime = bornTime + MIN_UPDATE_INTERVAL_NS;
+            maxOutputLength = 0;
+            final int workToDoLength = String.format("%d", workToDo).length();
+            final String workDoneFormat = String.format("%%%dd/%%%dd", workToDoLength, workToDoLength);
+            updateInfoFormat = workDoneFormat + " %.1f%% elapsed %s, remaining %s";
+            drawBar(0.0, Double.NaN);
+        }
+
+        public void update(final long workJustCompleted) {
+            if(workJustCompleted <= 0) {
+                throw new IllegalArgumentException("workJustCompleted must be > 0");
+            }
+            workRemaining -= workJustCompleted;
+            workDone += workJustCompleted;
+            final long now = System.nanoTime();
+            if(now < nextUpdateTime && workRemaining > 0) {
+                return;  // avoid thrashing to the screen
+            } else {
+                nextUpdateTime = now + MIN_UPDATE_INTERVAL_NS;
+            }
+            final double elapsedTimeSec = 1.0e-9 * (now - bornTime);
+            final double workPerSec = workDone / elapsedTimeSec;
+            final double remainingTimeSec = workRemaining / workPerSec;
+            System.out.flush();
+            drawBar(elapsedTimeSec, remainingTimeSec);
+        }
+
+        private void drawBar(final double elapsedTimeSec, final double remainingTimeSec) {
+            // NOTE: carriage return means each output will start from the beginning of the line
+            final StringBuilder stringBuilder = new StringBuilder(CARRIAGE_RETURN);
+            // draw actual progress bar
+            final int numBarFilled = (int)(NUM_BAR_CHARACTERS * workDone / workToDo);
+            final int numBarUnfilled = NUM_BAR_CHARACTERS - numBarFilled;
+            stringBuilder.append("|");
+            stringBuilder.append(StringUtils.repeat('#', numBarFilled));
+            stringBuilder.append(StringUtils.repeat(' ', numBarUnfilled));
+            stringBuilder.append("| ");
+            // write summary statistics on completion amount, times
+            stringBuilder.append(
+                    workDone > 0 ?
+                    String.format(
+                        updateInfoFormat, workDone, workToDo, workDone * 100.0 / workToDo,
+                        secondsToTimeString(elapsedTimeSec), secondsToTimeString(remainingTimeSec)
+                    )
+                    : String.format(updateInfoFormat, 0, workToDo, 0.0, secondsToTimeString(0.0), "???")
+            );
+            // do any necessary padding
+            if(stringBuilder.length() > maxOutputLength) {
+                maxOutputLength = stringBuilder.length();
+            } else if(stringBuilder.length() < maxOutputLength) {
+                // pad with spaces to obliterate previous message
+                stringBuilder.append(StringUtils.repeat(' ', maxOutputLength - stringBuilder.length()));
+            }
+            // if we're done, add newline
+            if(workRemaining <= 0) {
+                stringBuilder.append("\n");
+            }
+            // write out and flush
+            System.out.print(stringBuilder.toString());
+            System.out.flush();
+        }
+
+        private static String secondsToTimeString(double seconds) {
+            if(seconds < SECONDS_IN_MINUTE) {
+                return String.format("%.1fs", seconds);
+            }
+            long minutes = (int)Math.floor(seconds / SECONDS_IN_MINUTE);
+            seconds = seconds % SECONDS_IN_MINUTE;
+            long hours = minutes / MINUTES_IN_HOUR;
+            if(hours <= 0) {
+                return String.format("%dm %.1fs", minutes, seconds);
+            }
+            minutes = minutes % MINUTES_IN_HOUR;
+            long days = hours / HOURS_IN_DAY;
+            if(days <= 0) {
+                return String.format("%dh %dm %.1fs", hours, minutes, seconds);
+            } else {
+                hours = hours % HOURS_IN_DAY;
+                return String.format("%dd %dh %dm %.1fs", days, hours, minutes, seconds);
+            }
         }
     }
 

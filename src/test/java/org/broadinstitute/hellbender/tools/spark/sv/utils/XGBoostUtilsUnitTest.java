@@ -109,7 +109,7 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
                 CLASSIFIER_PARAMS, XGBoostUtils.DEFAULT_TUNING_PARAMETERS,
                 MachineLearningUtils.ClassifierTuningStrategy.RANDOM,
                 tuneMatrix, random, tuneStratify, NUM_CROSSVALIDATION_FOLDS, NUM_TRAINING_ROUNDS,
-                EARLY_STOPPING_ROUNDS, NUM_TUNING_ROUNDS, MAXIMIZE_EVAL_METRIC
+                EARLY_STOPPING_ROUNDS, 1000, MAXIMIZE_EVAL_METRIC
         );
 
         final int[] predictedTestLabels = classifier.crossvalidatePredict(
