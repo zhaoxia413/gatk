@@ -366,7 +366,7 @@ private void applyAFFilter(final VariantContext vc, final FilterResult filterRes
                                          final Optional<FilteringFirstPass> firstPass) {
         firstPass.ifPresent(ffp -> Utils.validate(ffp.isReadyForSecondPass(), "First pass information has not been processed into a model for the second pass."));
         final FilterResult filterResult = new FilterResult();
-        applyFilteredHaplotypeFilter(MTFAC, vc, filterResult, firstPass);
+        //applyFilteredHaplotypeFilter(MTFAC, vc, filterResult, firstPass);
         applyInsufficientEvidenceFilter(MTFAC, vc, filterResult);
         applyClusteredEventFilter(vc, filterResult);
         applyDuplicatedAltReadFilter(MTFAC, vc, filterResult);
