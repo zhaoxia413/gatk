@@ -91,7 +91,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
     @Argument(doc = "path to SVM-light sparse data files, used to load demo classifier data for testing and training."+
                 " Folder should contain one train.txt file and one test.txt file.",
             fullName = "demo-data-file", optional = true)
-    private String demoDataFile = publicTestDir + "spark/sv/utils/agaricus-integers.csv.gz";
+    private String demoDataFile = publicTestDir + "org/broadinstitute/hellbender/tools/spark/sv/utils/agaricus-integers.csv.gz";
 
     @Argument(doc = "path to SVM-light sparse data files, used to load demo classifier data for testing and training."+
             " Folder should contain one train.txt file and one test.txt file.",
@@ -100,19 +100,19 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
 
     @Argument(doc="Stop classifier training if score does not improve for this many consecutive rounds.",
             fullName = "early-stopping-rounds", optional = true)
-    private final int earlyStoppingRounds = 10;
+    private final int earlyStoppingRounds = XGBoostUtils.DEFAULT_EARLY_STOPPING_ROUNDS;
 
     @Argument(doc="Train classifier for at most this many rounds.",
             fullName = "max-training-rounds", optional = true)
-    private final int maxTrainingRounds = 1000;
+    private final int maxTrainingRounds = XGBoostUtils.DEFAULT_NUM_TRAINING_ROUNDS;
 
     @Argument(doc="When performing cross-validation, use this many folds.",
             fullName = "num-crossvalidation-folds", optional = true)
-    private final int numCrossvalidationFolds = 5;
+    private final int numCrossvalidationFolds = MachineLearningUtils.DEFAULT_NUM_CROSSVALIDATION_FOLDS;
 
     @Argument(doc="When optimizing hyperparameters, search for this many rounds.",
             fullName = "num-hyperparameter-optimization-rounds", optional = true)
-    private final int numTuningRounds = 100;
+    private final int numTuningRounds = MachineLearningUtils.DEFAULT_NUM_TUNING_ROUNDS;
 
     @Argument(doc="When optimizing hyperparameters, reserve this proportion of data for tuning hyperparameters.",
             fullName = "hyperparameter-tuning-proportion", optional = true)
@@ -120,23 +120,16 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
 
     @Argument(doc="Use this metric to evaluate performance of the classifier.",
             fullName = "eval-metric", optional = true)
-    private final String evalMetric = "logloss";
-
-    @Argument(doc="Classifier tries to maximize eval-metric if true, minimize it if false.",
-            fullName = "maximize-eval-metric", optional = true)
-    private final boolean maximizeEvalMetric = false;
+    private final String evalMetric = XGBoostUtils.DEFAULT_EVAL_METRIC;
 
     @Argument(doc="Seed for random numbers. If null, initialize randomly",
             fullName = "random-seed", optional = true)
-    private final Long seed = 0L;
+    private final Long seed = XGBoostUtils.DEFAULT_SEED;
 
     @Argument(doc="Number of threads to use for training classifier. It is optimal to have one thread per available" +
                   " physical processor (not hyperthread)",
             fullName = "nthread", optional = true)
     private final int nthread = Runtime.getRuntime().availableProcessors();
-
-
-
 
     @Argument(doc="Tuning strategy for choosing classifier hyperparameters",
             fullName = "classifier-tuning-strategy", optional = true)
@@ -156,7 +149,9 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         if(hyperparameterTuningProportion == null) {
             hyperparameterTuningProportion = 1.0 / (1.0 + numTuningRounds);
         }
-        final int[] stratify = MachineLearningUtils.getClassLabels(dataMatrix);
+        //final int[] stratify = MachineLearningUtils.getClassLabels(dataMatrix);
+        final int[] stratify = MachineLearningUtils.stratifyMatrixToStratifyArray(dataMatrix, 5,
+                (int)Math.ceil(numCrossvalidationFolds / hyperparameterTuningProportion));
 
         localLogger.info("Splitting data");
         final MachineLearningUtils.TrainTestSplit hyperSplit = MachineLearningUtils.TrainTestSplit.getTrainTestSplit(
@@ -181,7 +176,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         final Map<String, Object> bestClassifierParameters = classifier.tuneClassifierParameters(
                 classifierParameters, XGBoostUtils.DEFAULT_TUNING_PARAMETERS, classifierTuningStrategy,
                 tuneMatrix, random, tuneStratify, numCrossvalidationFolds, maxTrainingRounds, earlyStoppingRounds,
-                numTuningRounds, maximizeEvalMetric
+                numTuningRounds
         );
         localLogger.info("bestClassifierParameters: " + bestClassifierParameters.toString());
 

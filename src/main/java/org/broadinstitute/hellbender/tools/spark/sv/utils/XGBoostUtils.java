@@ -14,7 +14,6 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.*;
 
 
@@ -39,7 +38,7 @@ public class XGBoostUtils extends MachineLearningUtils {
     public static final String NUM_THREADS_KEY = "nthread";
     public static final String SCALE_POS_WEIGHT_KEY = "scale_pos_weight";
     public static final String SEED_KEY = "seed";
-    public static final int DEFAULT_SEED = 0;
+    public static final long DEFAULT_SEED = 0L;
     public static final int DEFAULT_NUM_TRAINING_ROUNDS = 1000;
     public static final int DEFAULT_EARLY_STOPPING_ROUNDS = 50;
     @SuppressWarnings("serial")
@@ -69,6 +68,26 @@ public class XGBoostUtils extends MachineLearningUtils {
             put(COLSAMPLE_BY_TREE_KEY, new MachineLearningUtils.ClassifierLinearParamRange(0.5, 1.0));
             put(COLSAMPLE_BY_LEVEL_KEY, new MachineLearningUtils.ClassifierLinearParamRange(0.5, 1.0));
             put(MAX_DELTA_STEP_KEY, new MachineLearningUtils.ClassifierLinearParamRange(0.0, 10.0));
+        }
+    };
+    @SuppressWarnings("serial")
+    public static final Map<String, Boolean> GET_BUILTIN_MAXIMIZE_EVAL_METRIC = new HashMap<String, Boolean>() {
+        {
+            put("rmse", false);
+            put("mae", false);
+            put("logloss", false);
+            put("error", false);
+            put("merror", false);
+            put("auc", true);
+            put("ndcg", true);
+            put("ndcg-", true);
+            put("map", true);
+            put("map-", true);
+            put("poisson-nloglik", false);
+            put("gamma-nloglik", false);
+            put("cox-nloglik", false);
+            put("gamma-deviance", false);
+            put("tweedie-nloglik", false);
         }
     };
 
@@ -169,17 +188,32 @@ public class XGBoostUtils extends MachineLearningUtils {
         }
 
         @Override
-        public float[] trainAndReturnQualityTrace(
+        public boolean getMaximizeEvalMetric(final Map<String, Object> classifierParameters) {
+            final String evalMetric = (String)classifierParameters.get(EVAL_METRIC_KEY);
+            final String key = evalMetric.contains("@") ? evalMetric.substring(0, evalMetric.indexOf('@')) : evalMetric;
+            if(!GET_BUILTIN_MAXIMIZE_EVAL_METRIC.containsKey(key)) {
+                throw new IllegalArgumentException(
+                        evalMetric + " not in default GET_BUILTIN_MAXIMIZE_EVAL_METRIC. To use a custom evaluation"
+                                + " metric, a boolean must be added to that map specifying if the metric should be maximized"
+                                + " (or minimized)"
+                );
+            }
+            return GET_BUILTIN_MAXIMIZE_EVAL_METRIC.get(key);
+        }
+
+
+        @Override
+        public double[] trainAndReturnQualityTrace(
                 final Map<String, Object> classifierParameters, final RealMatrix trainingMatrix,
-                final RealMatrix evaluationMatrix, final int maxTrainingRounds, final int earlyStoppingRounds,
-                final boolean maximizeEvalMetric
+                final RealMatrix evaluationMatrix, final int maxTrainingRounds, final int earlyStoppingRounds
         ) {
+            final boolean maximizeEvalMetric = getMaximizeEvalMetric(classifierParameters);
             final DMatrix trainingDMatrix = realMatrixToDMatrix(trainingMatrix);
             final DMatrix[] evalMatrices = {realMatrixToDMatrix(evaluationMatrix)};
             final String[] evalNames = {"test"};
             final float[] metricsOut = new float[1];
-            final float[] trainingTrace = new float [maxTrainingRounds];
-            float bestTraceValue;
+            final double[] trainingTrace = new double [maxTrainingRounds];
+            double bestTraceValue;
             int stopRound = earlyStoppingRounds;
             try {
                 Map<String, DMatrix> watches = new HashMap<> ();
@@ -210,12 +244,26 @@ public class XGBoostUtils extends MachineLearningUtils {
         }
 
         @Override
-        public float[][] predictProbability(final RealMatrix matrix) {
+        public double[][] predictProbability(final RealMatrix matrix) {
+            final float [][] floatProbabilities;
             try {
-                return booster.predict(realMatrixToDMatrix(matrix));
+                floatProbabilities = booster.predict(realMatrixToDMatrix(matrix));
             } catch(XGBoostError err) {
-                throw new GATKException(err.getMessage());
+                throw new GATKException(err.getClass() + ": " + err.getMessage());
             }
+            // convert from float[][] to double[][]
+            final int numRows = floatProbabilities.length;
+            final int numCols = numRows > 0 ? floatProbabilities[0].length : 0;
+            final double[][] doubleProbabilities = new double [numRows][numCols];
+
+            for(int row = 0; row < numRows; ++row) {
+                final double[] newRow = doubleProbabilities[row];
+                final float[] oldRow = floatProbabilities[row];
+                for(int column = 0; column < numCols; ++column) {
+                    newRow[column] = oldRow[column];
+                }
+            }
+            return doubleProbabilities;
         }
     }
 }

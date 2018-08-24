@@ -10,14 +10,17 @@ import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.apache.commons.math3.linear.RealMatrix;
+import org.apache.commons.math3.stat.descriptive.rank.Percentile;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import scala.Int;
 
 import javax.crypto.Mac;
 import java.io.*;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 
 public class MachineLearningUtils {
@@ -107,21 +110,22 @@ public class MachineLearningUtils {
         public abstract GATKClassifier train(final Map<String, Object> classifierParameters,
                                              final RealMatrix trainingMatrix);
 
-        public abstract float[] trainAndReturnQualityTrace(
+        public abstract double[] trainAndReturnQualityTrace(
                 final Map<String, Object> classifierParameters, final RealMatrix trainingMatrix,
-                final RealMatrix evaluationMatrix, final int maxTrainingRounds, final int earlyStoppingRounds,
-                final boolean maximizeEvalMetric);
+                final RealMatrix evaluationMatrix, final int maxTrainingRounds, final int earlyStoppingRounds);
 
-        public abstract float[][] predictProbability(final RealMatrix matrix);
+        public abstract double[][] predictProbability(final RealMatrix matrix);
 
-        public float[] predictProbability(final double[] featureVector) {
+        public abstract boolean getMaximizeEvalMetric(final Map<String, Object> classifierParameters);
+
+        public double[] predictProbability(final double[] featureVector) {
             singlePredictWrapper[0] = featureVector;
             final RealMatrix matrix = new Array2DRowRealMatrix(singlePredictWrapper, false);
             return (predictProbability(matrix)[0]);
         }
 
         public int[] predictClassLabels(final RealMatrix matrix) {
-            final float [][] predictedProbabilities = predictProbability(matrix);
+            final double [][] predictedProbabilities = predictProbability(matrix);
             final int [] predictedLabels = new int[predictedProbabilities.length];
             if(predictedProbabilities.length == 0) {
                 return predictedLabels;
@@ -179,9 +183,9 @@ public class MachineLearningUtils {
                 calibrationMatrix = trainingMatrix;
             } else {
                 final int[] stratify = getClassLabels(trainingMatrix);
-                localLogger.info("trainingFraction = " + numCalibrationRows / (float)trainingMatrix.getRowDimension());
+                localLogger.info("trainingFraction = " + numCalibrationRows / (double)trainingMatrix.getRowDimension());
                 final TrainTestSplit trainTestSplit = TrainTestSplit.getTrainTestSplit(
-                        numCalibrationRows / (float)trainingMatrix.getRowDimension(),
+                        numCalibrationRows / (double)trainingMatrix.getRowDimension(),
                         trainingMatrix.getRowDimension(), new Random(), stratify
                 );
                 localLogger.info("numTrain = " + trainTestSplit.trainRows.length);
@@ -215,32 +219,31 @@ public class MachineLearningUtils {
             return System.nanoTime() - startTime;
         }
 
-        private float[][] getCrossvalidatedTrainingTraces(final Map<String, Object> classifierParameters,
+        private double[][] getCrossvalidatedTrainingTraces(final Map<String, Object> classifierParameters,
                                                           final RealMatrix trainMatrix, final List<TrainTestSplit> splits,
-                                                          final int maxTrainingRounds, final int earlyStoppingRounds,
-                                                          final boolean maximizeEvalMetric) {
+                                                          final int maxTrainingRounds, final int earlyStoppingRounds) {
             final int numCrossvalidationFolds = splits.size();
-            float[][] trainingTraces = new float[numCrossvalidationFolds][];
+            double[][] trainingTraces = new double[numCrossvalidationFolds][];
             for(int fold = 0; fold < numCrossvalidationFolds; ++fold) {
                 final TrainTestSplit split = splits.get(fold);
                 trainingTraces[fold] = trainAndReturnQualityTrace(
                         classifierParameters, sliceRows(trainMatrix, split.trainRows),
-                        sliceRows(trainMatrix, split.testRows), maxTrainingRounds, earlyStoppingRounds,
-                        maximizeEvalMetric
+                        sliceRows(trainMatrix, split.testRows), maxTrainingRounds, earlyStoppingRounds
                 );
             }
             return trainingTraces;
         }
 
         private double getTrainingScore(final Map<String, Object> classifierParameters,
-                                        final float[][] trainingTraces, final boolean maximizeEvalMetric) {
+                                        final double[][] trainingTraces) {
             // find the index with the best total (i.e. mean) score across rounds. This yields the optimal number of
             // rounds of training
-            float bestTotalScore = maximizeEvalMetric ? Float.MIN_VALUE : Float.MAX_VALUE;
+            final boolean maximizeEvalMetric = getMaximizeEvalMetric(classifierParameters);
+            double bestTotalScore = maximizeEvalMetric ? Double.MIN_VALUE : Double.MAX_VALUE;
             int bestRoundIndex = -1;
             final int maxTrainingRounds = trainingTraces[0].length;
             for(int roundIndex = 0; roundIndex < maxTrainingRounds; ++roundIndex) {
-                float roundScore = trainingTraces[0][roundIndex];
+                double roundScore = trainingTraces[0][roundIndex];
                 for(int fold = 1; fold < trainingTraces.length; ++fold) {
                     roundScore += trainingTraces[fold][roundIndex];
                 }
@@ -254,7 +257,7 @@ public class MachineLearningUtils {
 
             // report the overall score for this set of parameters as the score of the *worst* trace at the optimal training
             // index. Selecting the worst trace demands high reliability from the classifier across similar data sets.
-            float trainingScore = trainingTraces[0][bestRoundIndex];
+            double trainingScore = trainingTraces[0][bestRoundIndex];
             if(maximizeEvalMetric) {
                 for (int fold = 1; fold < trainingTraces.length; ++fold) {
                     trainingScore = Math.min(trainingScore, trainingTraces[fold][bestRoundIndex]);
@@ -275,7 +278,8 @@ public class MachineLearningUtils {
                                                             final RealMatrix trainMatrix, final Random random,
                                                             final int[] stratify, final int numCrossvalidationFolds,
                                                             final int maxTrainingRounds, final int earlyStoppingRounds,
-                                                            final int numTuningRounds, final boolean maximizeEvalMetric) {
+                                                            final int numTuningRounds) {
+            final boolean maximizeEvalMetric = getMaximizeEvalMetric(classifierParameters);
             final List<TrainTestSplit> splits = new ArrayList<>(numCrossvalidationFolds);
             TrainTestSplit.getCrossvalidationSplits(
                     numCrossvalidationFolds, trainMatrix.getRowDimension(), random, stratify
@@ -285,14 +289,14 @@ public class MachineLearningUtils {
             switch(classifierTuningStrategy) {
                 case RANDOM:
                     classifierTuner = new RandomClassifierTuner(
-                            this, tuneClassifierParameters, numTuningRounds, maximizeEvalMetric, random
+                            this, classifierParameters, tuneClassifierParameters, numTuningRounds, random
                     );
                     break;
                 default:
                     throw new IllegalStateException("Invalid ClassifierTuningStrategy: " + classifierTuningStrategy);
             }
 
-            return classifierTuner.getBestParameters(classifierParameters, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds);
+            return classifierTuner.getBestParameters(trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds);
 
         }
 
@@ -461,14 +465,16 @@ public class MachineLearningUtils {
 
     static abstract class ClassifierTuner {
         private final GATKClassifier classifier;
+        protected final Map<String, Object> classifierParameters;
         protected final Map<String, ClassifierParamRange<?>> tuneParameters;
         protected final int numTuningRounds;
         protected final boolean maximizeEvalMetric;
         protected final List<Map<String, Object>> hyperparameterSets;
         protected final List<Double> hyperparameterScores;
 
-        ClassifierTuner(final GATKClassifier classifier, final Map<String, ClassifierParamRange<?>> tuneParameters,
-                        final int numTuningRounds, final boolean maximizeEvalMetric) {
+        ClassifierTuner(final GATKClassifier classifier, final Map<String, Object> classifierParameters,
+                        final Map<String, ClassifierParamRange<?>> tuneParameters,
+                        final int numTuningRounds) {
             if(numTuningRounds < 1) {
                 throw new IllegalArgumentException("numTuningRounds (" + numTuningRounds + ") must be >= 1");
             }
@@ -477,13 +483,13 @@ public class MachineLearningUtils {
             this.numTuningRounds = numTuningRounds;
             this.hyperparameterSets = new ArrayList<> ();
             this.hyperparameterScores = new ArrayList<>();
-            this.maximizeEvalMetric = maximizeEvalMetric;
+            this.classifierParameters = classifierParameters;
+            this.maximizeEvalMetric = classifier.getMaximizeEvalMetric(classifierParameters);
         }
 
         abstract protected Map<String, Object> chooseNextHyperparameters();
 
-        Map<String, Object> getBestParameters(final Map<String, Object> classifierParameters,
-                                              final RealMatrix trainMatrix, final List<TrainTestSplit> splits,
+        Map<String, Object> getBestParameters(final RealMatrix trainMatrix, final List<TrainTestSplit> splits,
                                               final int maxTrainingRounds, final int earlyStoppingRounds) {
             Map<String, Object> bestParameters = null;
             double bestScore = maximizeEvalMetric ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
@@ -495,11 +501,10 @@ public class MachineLearningUtils {
                 hyperparameterSets.add(hyperparameters);
                 final Map<String, Object> testParameters = new HashMap<>(classifierParameters);
                 testParameters.putAll(hyperparameters);
-                final float[][] trainingTraces = classifier.getCrossvalidatedTrainingTraces(
-                        testParameters, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds,
-                        maximizeEvalMetric
+                final double[][] trainingTraces = classifier.getCrossvalidatedTrainingTraces(
+                        testParameters, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds
                 );
-                final double score = classifier.getTrainingScore(testParameters, trainingTraces, maximizeEvalMetric);
+                final double score = classifier.getTrainingScore(testParameters, trainingTraces);
                 hyperparameterScores.add(score);
                 // This is the new best score if a) it is better than the previous best score so far -OR-
                 //                               b) it exactly ties the best score, but uses fewer rounds of training
@@ -517,9 +522,10 @@ public class MachineLearningUtils {
 
     static class RandomClassifierTuner extends ClassifierTuner {
         private final Map<String, Object[]> randomParameters;
-        RandomClassifierTuner(final GATKClassifier classifier, final Map<String, ClassifierParamRange<?>> tuneParameters,
-                              final int numTuningRounds, final boolean maximizeEvalMetric, final Random random) {
-            super(classifier, tuneParameters, numTuningRounds, maximizeEvalMetric);
+        RandomClassifierTuner(final GATKClassifier classifier, final Map<String, Object> classifierParameters,
+                              final Map<String, ClassifierParamRange<?>> tuneParameters, final int numTuningRounds,
+                              final Random random) {
+            super(classifier, classifierParameters, tuneParameters, numTuningRounds);
             randomParameters = tuneParameters.entrySet().stream().collect(
                     Collectors.toMap(
                             Map.Entry::getKey,
@@ -835,10 +841,9 @@ public class MachineLearningUtils {
         }
     }
 
-    @VisibleForTesting
-    static int argmax(final float[] arr) {
+    public static int argmax(final double[] arr) {
         int bestIndex = -1;
-        float bestValue = Float.MIN_VALUE;
+        double bestValue = Double.MIN_VALUE;
         for(int index = 0; index < arr.length; ++index) {
             if(arr[index] > bestValue) {
                 bestIndex = index;
@@ -871,6 +876,190 @@ public class MachineLearningUtils {
             permutation[i] = swap_val;
         }
         return permutation;
+    }
+
+
+    public static int[] stratifyMatrixToStratifyArray(final RealMatrix stratifyMatrix, final int numBins,
+                                                      final int minCountsPerStratifyValue) {
+        return stratifyMatrixToStratifyArray(stratifyMatrix, numBins, minCountsPerStratifyValue, new ArrayList<>());
+    }
+
+    public static int[] stratifyMatrixToStratifyArray(final RealMatrix stratifyMatrix, final int numBins,
+                                                      final int minCountsPerStratifyValue,
+                                                      final Collection<Integer> categoricalColumns) {
+        // first form binned version of each column
+        final int[][] binnedStratifyMatrix = new int[stratifyMatrix.getRowDimension()][stratifyMatrix.getColumnDimension()];
+        for(int columnIndex = 0; columnIndex < stratifyMatrix.getColumnDimension(); ++columnIndex) {
+            final int[] columnBins = categoricalColumns.contains(columnIndex) ?
+                    getCategoryCodes(stratifyMatrix.getColumn(columnIndex))
+                    : getBinnedColumn(stratifyMatrix.getColumn(columnIndex), numBins);
+            for(int row = 0; row < stratifyMatrix.getRowDimension(); ++row) {
+                binnedStratifyMatrix[row][columnIndex] = columnBins[row];
+            }
+        }
+
+        // Get a set of unique rows
+        Set<List<Integer>> resultsToCheck = getUniqueRows(
+                binnedStratifyMatrix,
+                IntStream.range(0, stratifyMatrix.getColumnDimension()).boxed().collect(Collectors.toList()),
+                stratifyMatrix.getColumnDimension()
+        );
+        // While there are rows that have too few instances, decrease the number of columns under consideration (only
+        // for those undersized rows)
+        final Set<List<Integer>> uniqueResults = new HashSet<>();
+        for(int useNumColumns = stratifyMatrix.getColumnDimension() - 1; useNumColumns > 0; --useNumColumns) {
+            // Add undersized rows to a set to be reprocessed. Add properly sized rows to final uniqueResults set.
+            final Set<List<Integer>> undersizedStratify = new HashSet<>();
+            for(final List<Integer> uniqueResult : resultsToCheck) {
+                if(uniqueResult.size() < minCountsPerStratifyValue) {
+                    undersizedStratify.add(uniqueResult);
+                } else {
+                    uniqueResults.add(uniqueResult);
+                }
+            }
+            if(undersizedStratify.isEmpty()) {
+                break; // no problematic values, we're done
+            } else if(useNumColumns == 1) {
+                // can't consider fewer columns, lump remaining rows into the stratify value with the fewest members, to
+                // make an "odd-ball" value.
+                if(uniqueResults.isEmpty()) {
+                    // handle edge case where every unique row has too few counts
+                    uniqueResults.add(new ArrayList<>());
+                }
+                final List<Integer> smallest = uniqueResults.stream().min(Comparator.comparing(List::size))
+                        .orElseThrow(NoSuchElementException::new);
+                for(final List<Integer> uniqueResult : undersizedStratify) {
+                    smallest.addAll(uniqueResult);
+                }
+                Collections.sort(smallest);
+            } else {
+                // find unique rows from subset that are too small, looking at one fewer column
+                final List<Integer> tooSmall = undersizedStratify.stream().flatMap(Collection::stream).sorted()
+                        .collect(Collectors.toList());
+                resultsToCheck = getUniqueRows(binnedStratifyMatrix, tooSmall, useNumColumns);
+            }
+        }
+
+
+        final int[] stratifyArray = new int[binnedStratifyMatrix.length];
+        int stratifyValue = 0;
+        for(final List<Integer> uniqueResult : uniqueResults) {
+            for(final int index : uniqueResult) {
+                stratifyArray[index] = stratifyValue;
+            }
+            ++stratifyValue;
+        }
+        return stratifyArray;
+    }
+
+    private static int[] getCategoryCodes(final double[] column) {
+        final int[] categoryCodes = new int[column.length];
+        final Map<Double, Integer> codesMap = new HashMap<>();
+        for(int i = 0; i < column.length; ++i) {
+            final double value = column[i];
+            final Integer code = codesMap.getOrDefault(value, null);
+            if(code == null) {
+                categoryCodes[i] = codesMap.size();
+                codesMap.put(value, codesMap.size());
+            } else {
+                categoryCodes[i] = code;
+            }
+        }
+        return categoryCodes;
+    }
+
+    private static int[] getBinnedColumn(final double[] column, final int numBins) {
+        final int numUniqueColumnValues = (int)DoubleStream.of(column).distinct().count();
+        if(numUniqueColumnValues <= numBins) {
+            // Too much repetition to bin the data into the requested number of bins, just return unique values.
+            return getCategoryCodes(column);
+        }
+
+        // Attempt to get requested number of percentiles, insisting that all percentiles are unique. If some values are
+        // repeated, "percentiles" will not be evenly spaced, and it may not return exactly the requested number.
+        // NOTE: the last percentile will not be used for binning (percentiles are "posts", bins are "fence") so request
+        // one more percentile than bins
+        final double[] percentiles = getUniquePercentiles(column, numBins + 1);
+
+        // bin column to specified percentiles, dumping NaN into the last bin if it is present. Note that the percentiles
+        // will be properly sized to account for the presence of NaN values.
+        // NOTE: binarySearch is limited to ignore last percentile, because we don't want the max value in the array
+        // being mapped past the maximum requested number of bins.
+        return DoubleStream.of(column).mapToInt(
+                v -> Double.isNaN(v) ? numBins - 1 : Arrays.binarySearch(percentiles, 0, percentiles.length, v)
+        ).toArray();
+    }
+
+    private static double[] getUniquePercentiles(final double[] column, final int numPercentiles) {
+        final int numNaN = (int)Arrays.stream(column).filter(Double::isNaN).count();
+        final int numSortablePercentiles = numNaN == 0 ? numPercentiles : numPercentiles - 1;
+        final Percentile percentileEvaluator = new Percentile().withEstimationType(Percentile.EstimationType.R_1);
+        percentileEvaluator.setData(column);
+        double[] percentiles = percentileSpace(percentileEvaluator, numSortablePercentiles);
+        if(percentiles.length == numSortablePercentiles) {
+            return percentiles; // should be the case for typical non-repeating data
+        }
+
+        final int numSortable = column.length - numNaN;
+        int numRequestHigh = numSortablePercentiles;
+        while(percentiles.length < numSortablePercentiles && numRequestHigh < numSortable) {
+            numRequestHigh = Math.min(2 * numRequestHigh, numSortable);
+            percentiles = percentileSpace(percentileEvaluator, numRequestHigh);
+        }
+        if(percentiles.length == numSortablePercentiles) {
+            return percentiles;
+        }
+        int numRequestLow = numSortablePercentiles;
+        int range = numRequestHigh - numRequestLow;
+        while(range > 1) {
+            final int numRequest = numRequestLow + range / 2;
+            percentiles = percentileSpace(percentileEvaluator, numRequest);
+            if(percentiles.length < numSortablePercentiles) {
+                numRequestLow = numRequest;
+            } else if(percentiles.length > numSortablePercentiles){
+                numRequestHigh = numRequest;
+            } else {
+                return percentiles;
+            }
+            range = numRequestHigh - numRequestLow;
+        }
+
+        // I'm not convinced that it's possible to get down to this point. It implies that you checked for one more
+        // percentile but got 2 or more new unique values back. Just in case, insist on having *fewer* than requested,
+        // since other approximate cases always yield that outcome.
+        percentiles = percentileSpace(percentileEvaluator, numRequestLow);
+
+        return percentiles;
+    }
+
+    private static final double[] percentileSpace(final Percentile percentileEvaluator, final int numPercentiles) {
+        final double low = 50.0 / percentileEvaluator.getData().length;
+        final double high = 100.0 - low;
+        final double coef = (high - low) / (numPercentiles - 1);
+        return IntStream.range(0, numPercentiles).mapToDouble(i -> percentileEvaluator.evaluate(low + i * coef))
+                .distinct().toArray();
+    }
+
+
+    private static Set<List<Integer>> getUniqueRows(final int[][] binnedStratifyMatrix,
+                                                    final List<Integer> checkRows,
+                                                    final int useNumColumns) {
+        final Map<String, List<Integer>> uniqueResultMap = new HashMap<>();
+
+        for(final int rowIndex : checkRows) {
+            final int[] row = binnedStratifyMatrix[rowIndex];
+            final String rowString = Arrays.toString(Arrays.copyOfRange(row, 0, useNumColumns));
+            final List<Integer> uniqueResult = uniqueResultMap.getOrDefault(rowString, null);
+            if(uniqueResult == null) {
+                final List<Integer> newResult = new ArrayList<>();
+                newResult.add(rowIndex);
+                uniqueResultMap.put(rowString, newResult);
+            } else {
+                uniqueResult.add(rowIndex);
+            }
+        }
+
+        return new HashSet<>(uniqueResultMap.values());
     }
 
     public static double getPredictionAccuracy(final int[] predictedLabels, final int[] correctLabels) {
