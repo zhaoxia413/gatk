@@ -3,13 +3,12 @@ package org.broadinstitute.hellbender.tools.spark.sv.evidence;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.spark.api.java.JavaSparkContext;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
+import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
-import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.MachineLearningUtils;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.XGBoostUtils;
@@ -70,7 +69,7 @@ import java.util.*;
                         " After training the classifier, the model file is saved, along with supporting files that are used in unit" +
                         " or integration tests.",
         programGroup = StructuralVariantDiscoveryProgramGroup.class)
-public class TrainEvidenceFilterClassifier extends GATKSparkTool {
+public class TrainEvidenceFilterClassifier extends CommandLineProgram {
     private static final long serialVersionUID = 1L;
     private static final Logger localLogger = LogManager.getLogger(TrainEvidenceFilterClassifier.class);
 
@@ -142,7 +141,8 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
      */
 
     @Override
-    protected void runTool(final JavaSparkContext ctx) {
+    //protected void runTool(final JavaSparkContext ctx) {
+    protected Object doWork() {
         localLogger.info("Loading demo data");
         final RealMatrix dataMatrix = MachineLearningUtils.loadCsvFile(demoDataFile);
 
@@ -200,6 +200,7 @@ public class TrainEvidenceFilterClassifier extends GATKSparkTool {
         } catch(IOException err) {
             throw new GATKException(err.getClass() + ": " + err.getMessage());
         }
+        return null;
     }
 
 }

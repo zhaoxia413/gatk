@@ -853,6 +853,19 @@ public class MachineLearningUtils {
         return bestIndex;
     }
 
+    public static RealMatrix concatenateColumns(final RealMatrix matrixA, final RealMatrix matrixB) {
+        if(matrixA.getRowDimension() != matrixB.getRowDimension()) {
+            throw new IllegalArgumentException("matrixA and matrixB do not have same number of rows.");
+        }
+        final RealMatrix matrixC = matrixA.createMatrix(
+                matrixA.getRowDimension(),
+                matrixA.getColumnDimension() + matrixB.getColumnDimension()
+        );
+        matrixC.setSubMatrix(matrixA.getData(), 0, 0);
+        matrixC.setSubMatrix(matrixB.getData(), 0, matrixA.getColumnDimension());
+        return matrixC;
+    }
+
     public static int[] argsort(final int[] arr) {
         final Integer[] sortIndices = getRange((Integer)arr.length);
         Arrays.sort(sortIndices, Comparator.comparingInt(ind -> arr[ind]));
