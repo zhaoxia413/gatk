@@ -118,6 +118,9 @@ public class MachineLearningUtils {
 
         public abstract boolean getMaximizeEvalMetric(final Map<String, Object> classifierParameters);
 
+        /*
+        public defined methods
+         */
         public double[] predictProbability(final double[] featureVector) {
             singlePredictWrapper[0] = featureVector;
             final RealMatrix matrix = new Array2DRowRealMatrix(singlePredictWrapper, false);
@@ -173,6 +176,51 @@ public class MachineLearningUtils {
             return classifier;
         }
 
+        public Map<String, Object> tuneClassifierParameters(final Map<String, Object> classifierParameters,
+                                                            final Map<String, ClassifierParamRange<?>> tuneClassifierParameters,
+                                                            final ClassifierTuningStrategy classifierTuningStrategy,
+                                                            final RealMatrix trainMatrix, final Random random,
+                                                            final int[] stratify, final int numCrossvalidationFolds,
+                                                            final int maxTrainingRounds, final int earlyStoppingRounds,
+                                                            final int numTuningRounds) {
+            final List<TrainTestSplit> splits = new ArrayList<>(numCrossvalidationFolds);
+            TrainTestSplit.getCrossvalidationSplits(
+                    numCrossvalidationFolds, trainMatrix.getRowDimension(), random, stratify
+            ).forEachRemaining(splits::add);
+
+            final ClassifierTuner classifierTuner;
+            switch(classifierTuningStrategy) {
+                case RANDOM:
+                    classifierTuner = new RandomClassifierTuner(
+                            this, classifierParameters, tuneClassifierParameters, numTuningRounds, random
+                    );
+                    break;
+                default:
+                    throw new IllegalStateException("Invalid ClassifierTuningStrategy: " + classifierTuningStrategy);
+            }
+
+            return classifierTuner.getBestParameters(trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds);
+
+        }
+
+        public int[] crossvalidatePredict(final RealMatrix dataMatrix, final Map<String, Object> classifierParameters,
+                                          final Random random, final int[] stratify, final int numCrossvalidationFolds) {
+            final int[] predictedLabels = new int[dataMatrix.getRowDimension()];
+            final Iterator<TrainTestSplit> splitIterator = TrainTestSplit.getCrossvalidationSplits(
+                    numCrossvalidationFolds, dataMatrix.getRowDimension(), random, stratify
+            );
+            while(splitIterator.hasNext()) {
+                final TrainTestSplit split = splitIterator.next();
+                // train on training data from this crossvalidation split
+                train(classifierParameters, sliceRows(dataMatrix, split.trainRows));
+                // predict on testing data from this split
+                final int[] predictedTestLabels = predictClassLabels(sliceRows(dataMatrix, split.testRows));
+                // and assign those values into the final predictions
+                sliceAssign(predictedLabels, split.testRows, predictedTestLabels);
+            }
+            return predictedLabels;
+        }
+
         public void chooseNumThreads(final Map<String, Object> classifierParameters, final String numThreadsKey,
                                      final RealMatrix trainingMatrix) {
             final int numCalibrationRows = NUM_CALIBRATION_CLASS_ROWS * 2;
@@ -213,6 +261,9 @@ public class MachineLearningUtils {
 
         }
 
+        /*
+        private methods
+         */
         private long getTrainingTime(final Map<String, Object> classifierParameters, final RealMatrix trainingMatrix) {
             final long startTime = System.nanoTime();
             train(classifierParameters, trainingMatrix);
@@ -270,52 +321,6 @@ public class MachineLearningUtils {
 
             classifierParameters.put(NUM_TRAINING_ROUNDS_KEY, numTrainingRounds);
             return trainingScore;
-        }
-
-        public Map<String, Object> tuneClassifierParameters(final Map<String, Object> classifierParameters,
-                                                            final Map<String, ClassifierParamRange<?>> tuneClassifierParameters,
-                                                            final ClassifierTuningStrategy classifierTuningStrategy,
-                                                            final RealMatrix trainMatrix, final Random random,
-                                                            final int[] stratify, final int numCrossvalidationFolds,
-                                                            final int maxTrainingRounds, final int earlyStoppingRounds,
-                                                            final int numTuningRounds) {
-            final boolean maximizeEvalMetric = getMaximizeEvalMetric(classifierParameters);
-            final List<TrainTestSplit> splits = new ArrayList<>(numCrossvalidationFolds);
-            TrainTestSplit.getCrossvalidationSplits(
-                    numCrossvalidationFolds, trainMatrix.getRowDimension(), random, stratify
-            ).forEachRemaining(splits::add);
-
-            final ClassifierTuner classifierTuner;
-            switch(classifierTuningStrategy) {
-                case RANDOM:
-                    classifierTuner = new RandomClassifierTuner(
-                            this, classifierParameters, tuneClassifierParameters, numTuningRounds, random
-                    );
-                    break;
-                default:
-                    throw new IllegalStateException("Invalid ClassifierTuningStrategy: " + classifierTuningStrategy);
-            }
-
-            return classifierTuner.getBestParameters(trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds);
-
-        }
-
-        public int[] crossvalidatePredict(final RealMatrix dataMatrix, final Map<String, Object> classifierParameters,
-                                          final Random random, final int[] stratify, final int numCrossvalidationFolds) {
-            final int[] predictedLabels = new int[dataMatrix.getRowDimension()];
-            final Iterator<TrainTestSplit> splitIterator = TrainTestSplit.getCrossvalidationSplits(
-                    numCrossvalidationFolds, dataMatrix.getRowDimension(), random, stratify
-            );
-            while(splitIterator.hasNext()) {
-                final TrainTestSplit split = splitIterator.next();
-                // train on training data from this crossvalidation split
-                train(classifierParameters, sliceRows(dataMatrix, split.trainRows));
-                // predict on testing data from this split
-                final int[] predictedTestLabels = predictClassLabels(sliceRows(dataMatrix, split.testRows));
-                // and assign those values into the final predictions
-                sliceAssign(predictedLabels, split.testRows, predictedTestLabels);
-            }
-            return predictedLabels;
         }
     }
 

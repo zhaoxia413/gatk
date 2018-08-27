@@ -1,17 +1,17 @@
-package org.broadinstitute.hellbender.tools.spark.sv.evidence;
+package org.broadinstitute.hellbender.tools.spark.sv.utils;
 
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.broadinstitute.barclay.argparser.Advanced;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
+import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.tools.spark.sv.utils.MachineLearningUtils;
-import org.broadinstitute.hellbender.tools.spark.sv.utils.XGBoostUtils;
 
 import java.io.File;
 import java.io.IOException;
@@ -69,32 +69,26 @@ import java.util.*;
                         " After training the classifier, the model file is saved, along with supporting files that are used in unit" +
                         " or integration tests.",
         programGroup = StructuralVariantDiscoveryProgramGroup.class)
-public class TrainEvidenceFilterClassifier extends CommandLineProgram {
+public class ExampleTrainXGBoostClassifier extends CommandLineProgram {
     private static final long serialVersionUID = 1L;
-    private static final Logger localLogger = LogManager.getLogger(TrainEvidenceFilterClassifier.class);
+    private static final Logger localLogger = LogManager.getLogger(ExampleTrainXGBoostClassifier.class);
 
     private static final String CURRENT_DIRECTORY = System.getProperty("user.dir");
-    private static final String gatkDirectory = System.1getProperty("gatkdir", CURRENT_DIRECTORY) + "/";
+    private static final String gatkDirectory = System.getProperty("gatkdir", CURRENT_DIRECTORY) + "/";
     private static final String publicTestDirRelative = "src/test/resources/";
     public static final String publicTestDir = new File(gatkDirectory, publicTestDirRelative).getAbsolutePath() + "/";
 
-
-    /*
-    @ArgumentCollection
-    private final StructuralVariationDiscoveryArgumentCollection.TrainEvidenceFilterArgumentCollection params =
-            new StructuralVariationDiscoveryArgumentCollection.TrainEvidenceFilterArgumentCollection();
-    */
     /**
      * Demo stuff STARTS here....
      */
     @Argument(doc = "path to SVM-light sparse data files, used to load demo classifier data for testing and training."+
-                " Folder should contain one train.txt file and one test.txt file.",
-            fullName = "demo-data-file", optional = true)
-    private String demoDataFile = publicTestDir + "org/broadinstitute/hellbender/tools/spark/sv/utils/agaricus-integers.csv.gz";
+            " Folder should contain one train.txt file and one test.txt file.",
+            fullName = StandardArgumentDefinitions.INPUT_LONG_NAME, shortName = StandardArgumentDefinitions.INPUT_SHORT_NAME)
+    private String demoDataFile;
 
     @Argument(doc = "path to SVM-light sparse data files, used to load demo classifier data for testing and training."+
             " Folder should contain one train.txt file and one test.txt file.",
-            fullName = "classifier-model-file", optional = false)
+            fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME)
     private String classifierModelFile;
 
     @Argument(doc="Stop classifier training if score does not improve for this many consecutive rounds.",
@@ -125,10 +119,17 @@ public class TrainEvidenceFilterClassifier extends CommandLineProgram {
             fullName = "random-seed", optional = true)
     private final Long seed = XGBoostUtils.DEFAULT_SEED;
 
-    @Argument(doc="Number of threads to use for training classifier. It is optimal to have one thread per available" +
-                  " physical processor (not hyperthread)",
+    @Advanced
+    @Argument(doc="Auto-select optimal number of threads to use for training classifier? If false, use nthread as"
+                  + " specified by user. If false, interpret that number as an upper bound, and select number of threads"
+                  + " with maximal throughput on small test problem",
+              fullName = "auto-select-nthread")
+    private final boolean autoSelectNumThreads = false;
+
+    @Argument(doc="Number of threads to use for training classifier. If ",
             fullName = "nthread", optional = true)
-    private final int nthread = Runtime.getRuntime().availableProcessors();
+    private final int numThreads = autoSelectNumThreads ? Runtime.getRuntime().availableProcessors()
+            : (int)Math.round(XGBoostUtils.GUESS_OPTIMAL_NUM_THREADS_PROPORTION * Runtime.getRuntime().availableProcessors());
 
     @Argument(doc="Tuning strategy for choosing classifier hyperparameters",
             fullName = "classifier-tuning-strategy", optional = true)
@@ -141,17 +142,23 @@ public class TrainEvidenceFilterClassifier extends CommandLineProgram {
      */
 
     @Override
-    //protected void runTool(final JavaSparkContext ctx) {
     protected Object doWork() {
         localLogger.info("Loading demo data");
         final RealMatrix dataMatrix = MachineLearningUtils.loadCsvFile(demoDataFile);
 
         if(hyperparameterTuningProportion == null) {
+            // This proportion produces the fastest training times overall, not necessarily the most useful results.
             hyperparameterTuningProportion = 1.0 / (1.0 + numTuningRounds);
         }
-        //final int[] stratify = MachineLearningUtils.getClassLabels(dataMatrix);
-        final int[] stratify = MachineLearningUtils.stratifyMatrixToStratifyArray(dataMatrix, 5,
-                (int)Math.ceil(numCrossvalidationFolds / hyperparameterTuningProportion));
+
+        // Choose min counts per stratify value so that after train-test split, each fold of cross-validation has at least
+        // one element of each stratify value.
+        final int minCountsPerStratifyValue = (hyperparameterTuningProportion == 0 || hyperparameterTuningProportion == 1) ?
+                numCrossvalidationFolds
+                : (int)Math.ceil(numCrossvalidationFolds / Math.min(hyperparameterTuningProportion, 1.0 - hyperparameterTuningProportion));
+        localLogger.info("Stratifying data matrix to balance data splitting / cross-validation folds.");
+        final int[] stratify = MachineLearningUtils.stratifyMatrixToStratifyArray(dataMatrix, 5, minCountsPerStratifyValue);
+
 
         localLogger.info("Splitting data");
         final MachineLearningUtils.TrainTestSplit hyperSplit = MachineLearningUtils.TrainTestSplit.getTrainTestSplit(
@@ -162,34 +169,52 @@ public class TrainEvidenceFilterClassifier extends CommandLineProgram {
         final RealMatrix validateMatrix = MachineLearningUtils.sliceRows(dataMatrix, hyperSplit.testRows);
         final int[] validateStratify = MachineLearningUtils.slice(stratify, hyperSplit.testRows);
 
-        // set the number of threads
-
-        final Map<String, Object> classifierParameters = new HashMap<> (XGBoostUtils.DEFAULT_CLASSIFIER_PARAMETERS);
-        classifierParameters.put(XGBoostUtils.NUM_THREADS_KEY, nthread);
-        classifierParameters.put(XGBoostUtils.EVAL_METRIC_KEY, evalMetric);
-
+        localLogger.info("Creating classifier object");
         final XGBoostUtils.GATKXGBooster classifier = new XGBoostUtils.GATKXGBooster();
-        classifier.chooseNumThreads(classifierParameters, XGBoostUtils.NUM_THREADS_KEY, tuneMatrix);
-        localLogger.info("Chose " + classifierParameters.get(XGBoostUtils.NUM_THREADS_KEY) + " threads");
 
-        localLogger.info("Tuning hyperparameters");
-        final Map<String, Object> bestClassifierParameters = classifier.tuneClassifierParameters(
-                classifierParameters, XGBoostUtils.DEFAULT_TUNING_PARAMETERS, classifierTuningStrategy,
-                tuneMatrix, random, tuneStratify, numCrossvalidationFolds, maxTrainingRounds, earlyStoppingRounds,
-                numTuningRounds
-        );
-        localLogger.info("bestClassifierParameters: " + bestClassifierParameters.toString());
+        // set the number of threads
+        final Map<String, Object> classifierParameters = new HashMap<> (XGBoostUtils.DEFAULT_CLASSIFIER_PARAMETERS);
+        classifierParameters.put(XGBoostUtils.NUM_THREADS_KEY, numThreads);
+        classifierParameters.put(XGBoostUtils.EVAL_METRIC_KEY, evalMetric);
+        if(autoSelectNumThreads) {
+            classifier.chooseNumThreads(classifierParameters, XGBoostUtils.NUM_THREADS_KEY, tuneMatrix);
+            localLogger.info("Chose " + classifierParameters.get(XGBoostUtils.NUM_THREADS_KEY) + " threads");
+        } else {
+            localLogger.info("User selected " + classifierParameters.get(XGBoostUtils.NUM_THREADS_KEY) + " threads");
+        }
 
-        localLogger.info("Cross-val predicting");
-        final int[] predictedTestLabels = classifier.crossvalidatePredict(
-                validateMatrix, bestClassifierParameters, random, validateStratify, numCrossvalidationFolds
-        );
+        // Note: tuning hyperparameters is basically always necessary: if data has changed enough to merit training a
+        // new classifier, then it merits finding the new best hyperparameters
+        final Map<String, Object> bestClassifierParameters;
+        if(tuneMatrix.getRowDimension() > 0) {
+            localLogger.info("Tuning hyperparameters");
+            bestClassifierParameters = classifier.tuneClassifierParameters(
+                    classifierParameters, XGBoostUtils.DEFAULT_TUNING_PARAMETERS, classifierTuningStrategy,
+                    tuneMatrix, random, tuneStratify, numCrossvalidationFolds, maxTrainingRounds, earlyStoppingRounds,
+                    numTuningRounds
+            );
+            localLogger.info("bestClassifierParameters: " + bestClassifierParameters.toString());
+        } else {
+            localLogger.info("skipping tuning hyperparameters, using default parameters");
+            bestClassifierParameters = classifierParameters;
+        }
 
-        final double accuracy = MachineLearningUtils.getPredictionAccuracy(
-                predictedTestLabels, MachineLearningUtils.getClassLabels(validateMatrix)
-        );
-        localLogger.info("Crossvalidated accuracy = " + String.format("%.1f%%", 100.0 * accuracy));
+        // note cross-validation is necessary if you want to estimate the accuracy of the new classifier. If you don't
+        // care (e.g. are committed to using the classifier regardless) then you can set hyperparameterTuningProportion
+        // to 1.0, or skip splitting the data and just tune on the whole set.
+        if(validateMatrix.getRowDimension() > 0) {
+            localLogger.info("Cross-val predicting");
+            final int[] predictedTestLabels = classifier.crossvalidatePredict(
+                    validateMatrix, bestClassifierParameters, random, validateStratify, numCrossvalidationFolds
+            );
 
+            final double accuracy = MachineLearningUtils.getPredictionAccuracy(
+                    predictedTestLabels, MachineLearningUtils.getClassLabels(validateMatrix)
+            );
+            localLogger.info("Crossvalidated accuracy = " + String.format("%.1f%%", 100.0 * accuracy));
+        } else {
+            localLogger.info("skipping evaluating crossvalidated accuracy");
+        }
 
         localLogger.info("Training final classifier");
         classifier.train(bestClassifierParameters, dataMatrix);
@@ -200,7 +225,19 @@ public class TrainEvidenceFilterClassifier extends CommandLineProgram {
         } catch(IOException err) {
             throw new GATKException(err.getClass() + ": " + err.getMessage());
         }
-        return null;
+
+        localLogger.info("Re-loading saved classifier");
+        final MachineLearningUtils.GATKClassifier loadedClassifier;
+        try {
+            loadedClassifier = MachineLearningUtils.GATKClassifier.load(classifierModelFile);
+        } catch(IOException err) {
+            throw new GATKException(err.getClass() +": " + err.getMessage());
+        }
+
+        localLogger.info("predicting probability that data is in each class");
+        final double[][] probabilities = loadedClassifier.predictProbability(dataMatrix);
+
+        return classifier;
     }
 
 }

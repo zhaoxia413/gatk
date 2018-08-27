@@ -18,6 +18,8 @@ import java.util.*;
 
 
 public class XGBoostUtils extends MachineLearningUtils {
+    public static final double GUESS_OPTIMAL_NUM_THREADS_PROPORTION = 0.85;
+
     public static final String LEARNING_RATE_KEY = "eta";
     public static final double DEFAULT_LEARNING_RATE = 0.5;
     public static final String MAX_DEPTH_KEY = "max_depth";
