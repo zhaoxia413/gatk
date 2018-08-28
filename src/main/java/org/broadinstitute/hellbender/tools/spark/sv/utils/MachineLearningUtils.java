@@ -4,7 +4,6 @@ import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.KryoSerializable;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
-import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.util.IOUtil;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -14,15 +13,19 @@ import org.apache.commons.math3.stat.descriptive.rank.Percentile;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import scala.Int;
 
-import javax.crypto.Mac;
 import java.io.*;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 
+/**
+ * This is a base utils class that provides an API for packages that need to use classifiers. Specific classifiers can
+ * be provided by extending GATKClassifier. Additional hyperparameter tuning strategies can be provided by extending
+ * ClassifierTuner. These abstract base classes implement some common routines that should make adding new classifiers
+ * or tuning strategies a little less tedious.
+ */
 public class MachineLearningUtils {
     public static final String NUM_TRAINING_ROUNDS_KEY = "num_training_rounds";
     public static final int DEFAULT_NUM_CROSSVALIDATION_FOLDS = 5;
@@ -33,93 +36,167 @@ public class MachineLearningUtils {
     public static final int CLASS_LABEL_COLUMN = 0;
     private static final Logger localLogger = LogManager.getLogger(MachineLearningUtils.class);
 
-    public static Array2DRowRealMatrix loadCsvFile(final String filename) {
-        return loadCsvFile(filename, ",", "#", CLASS_LABEL_COLUMN);
+    /** Simple class to hold truth sets: matrix of features paired */
+    public static class TruthSet {
+        public final RealMatrix features;
+        public final int[] classLabels;
+        TruthSet(final RealMatrix features, final int[] classLabels) {
+            if(classLabels != null && classLabels.length > 0 && features.getRowDimension() != classLabels.length) {
+                throw new GATKException(
+                        "classLabels must either be null, empty, or have same length as the number of rows in features."
+                );
+            }
+            this.features = features;
+            this.classLabels = classLabels == null ? new int[0] : classLabels;
+        }
+
+        public int getNumRows() {
+            return features.getRowDimension();
+        }
+
+        public int getNumColumns() {
+            return features.getColumnDimension();
+        }
+
+        public TruthSet sliceRows(final int[] rowIndices) {
+            return new TruthSet(
+                    MachineLearningUtils.sliceRows(features, rowIndices),
+                    slice(classLabels, rowIndices)
+            );
+        }
     }
 
     /**
-     * Load matrix from (possibly gzipped) csv file. Note: the first column of said
-     * @param filename
-     * @return
+     * Load TruthSet from (possibly gzipped) csv file. The file must represent numeric types only.
+     * Lines beginning with "#" will be ignored.
+     * Values in CLASS_LABEL_COLUMN of file will be interpreted as class labels.
      */
-    public static Array2DRowRealMatrix loadCsvFile(final String filename, final String delimiter,
-                                                   final String commentCharacter, final int classLabelsColumn) {
+    public static TruthSet loadCsvFile(final String filename) {
+        return loadCsvFile(filename, ",", "#", CLASS_LABEL_COLUMN);
+    }
+
+    /** [FIX]
+     * Load TruthSet from (possibly gzipped) file which uses arbitrary delimiter to sparate values.
+     * @param delimiter specify separator for values in file
+     * @param commentCharacter lines beginning with this value are ignored
+     * @param classLabelsColumn values in this column of the file will be interpreted as class labels.
+     *                          If classLabelsColumn < 0, then classLabels will be empty
+     */
+    public static TruthSet loadCsvFile(final String filename, final String delimiter,
+                                       final String commentCharacter, final int classLabelsColumn) {
         final int numColumns;
-        final List<double[]> rowsList;
+        final List<double[]> rowsList = new ArrayList<>();
+        final List<Integer> classLabelsList = new ArrayList<>();
         try (final BufferedReader reader = IOUtil.openFileForBufferedReading(new File(filename))) {
-            rowsList = new ArrayList<>();
             if(!reader.ready()) {
                 throw new GATKException("Unable to read matrix from " + filename);
             }
-            rowsList.add(getNextCsvFeaturesRow(reader, delimiter, commentCharacter, classLabelsColumn));
+            getNextCsvFeaturesRow(reader, delimiter, commentCharacter, classLabelsColumn, rowsList, classLabelsList, -1);
             numColumns = rowsList.get(0).length;
             while(reader.ready()) {
-                final double[] features = getNextCsvFeaturesRow(reader, delimiter, commentCharacter, classLabelsColumn);
-                if(features.length != numColumns) {
-                    throw new GATKException("filename does not encode a matrix, rows do not all have the same length");
-                }
-                rowsList.add(features);
+                getNextCsvFeaturesRow(reader, delimiter, commentCharacter, classLabelsColumn, rowsList, classLabelsList, numColumns);
             }
         } catch(IOException err) {
             throw new GATKException(err.getMessage());
         }
-        return new Array2DRowRealMatrix(rowsList.toArray(new double[0][]), false);
+        return new TruthSet(
+                new Array2DRowRealMatrix(rowsList.toArray(new double[0][]), false),
+                classLabelsList.stream().mapToInt(Integer::intValue).toArray()
+        );
     }
 
-    private static double[] getNextCsvFeaturesRow(final BufferedReader reader, final String delimiter,
-                                                  final String commentCharacter, final int classLabelsColumn) throws IOException {
+    private static void getNextCsvFeaturesRow(final BufferedReader reader, final String delimiter,
+                                              final String commentCharacter, final int classLabelsColumn,
+                                              final List<double[]> rowsList, final List<Integer> classLabelsList,
+                                              final int numColumns) throws IOException {
         String line = reader.readLine();
         while(line.startsWith(commentCharacter) || line.isEmpty()) {
             line = reader.readLine();
         }
         final String[] words = line.split(delimiter, -1);
-        final double[] features = Arrays.stream(words).mapToDouble(Double::valueOf).toArray();
-        if(classLabelsColumn != CLASS_LABEL_COLUMN) {
-            final double temp = features[classLabelsColumn];
-            features[classLabelsColumn] = features[CLASS_LABEL_COLUMN];
-            features[CLASS_LABEL_COLUMN] = temp;
+        final int numColumnsInRow = classLabelsColumn < 0 ? words.length : words.length - 1;
+        if(numColumns >= 0 && numColumnsInRow != numColumns) {
+            throw new GATKException("filename does not encode a matrix, rows do not all have the same length");
         }
-        return features;
+        final double[] features = new double[numColumnsInRow];
+        int featureIndex = 0;
+        for(int columnNumber = 0; columnNumber < words.length; ++columnNumber) {
+            final String word = words[columnNumber];
+            if(columnNumber == classLabelsColumn) {
+                classLabelsList.add(Integer.valueOf(word));
+            } else {
+                features[featureIndex] = Double.valueOf(word);
+                ++featureIndex;
+            }
+        }
+        rowsList.add(features);
     }
 
+    /**
+     * Form submatrix specified by selecting specified rows
+     */
     public static RealMatrix sliceRows(final RealMatrix matrix, final int[] sliceRows) {
         final int[] allColumns = getRange(matrix.getColumnDimension());
         return matrix.getSubMatrix(sliceRows, allColumns);
     }
 
-
-    public static int[] getClassLabels(final RealMatrix matrix) {
-        return getClassLabels(matrix, CLASS_LABEL_COLUMN);
-    }
-
-    public static int[] getClassLabels(final RealMatrix matrix, final int classLabelColumn) {
-        final int numRows = matrix.getRowDimension();
-        final int[] classLabels = new int[numRows];
-        for(int row = 0; row < numRows; ++row) {
-            classLabels[row] = (int)Math.round(matrix.getEntry(row, classLabelColumn));
-        }
-        return classLabels;
-    }
-
+    /**
+     * Abstract base classifier class. Actual classifiers must extend GATKClassifier and wrap whatever 3rd-party package
+     * implements the actual numerics. Note that implementing class must be Serializable and KryoSerializble (that is
+     * how saving is implemented)
+     */
     public static abstract class GATKClassifier implements Serializable, KryoSerializable {
         private static final long serialVersionUID = 1L;
 
         private final double[][] singlePredictWrapper = new double [1][];
 
-        // train classifier. Note, function should return "this"
+        /* public abstract routines. Implementing classes must override these */
+
+        /**
+         * Train classifier.
+         * This routine must be overridden by implementing class. It should update "this" to a trained state
+         * @param classifierParameters Map (from parameter names to values) that will be passed to classifier
+         *                             initialization and/or training routine. Since map values are Objects, the
+         *                             classifier must keep track of their type.
+         * @param truthSet             Data with matrix of features paired to correct class labels.
+         * @return upon success, the function should return "this"
+         */
         public abstract GATKClassifier train(final Map<String, Object> classifierParameters,
-                                             final RealMatrix trainingMatrix);
+                                             final TruthSet truthSet);
 
+        /**
+         * Train classifier and return trace of quality vs training round.
+         * @param classifierParameters Map (from parameter names to values) that will be passed to classifier
+         *                             initialization and/or training routine. Since map values are Objects, the
+         *                             classifier must keep track of their type.
+         * @param trainingSet          Truth data used for updating classifier during training.
+         * @param evaluationSet        Truth data used for evaluating classifier performance during training.
+         * @param maxTrainingRounds    Train for no more than this many rounds.
+         * @param earlyStoppingRounds  Training should stop if the best quality is more than earlyStoppingRounds ago.
+         *                             If early stopping is triggered, remaining trace values should be set to last
+         *                             obtained training value (i.e. not the best).
+         * @return double[] with length maxTrainingRounds, each value storing classifier "quality" as a function of
+         *         training round.
+         */
         public abstract double[] trainAndReturnQualityTrace(
-                final Map<String, Object> classifierParameters, final RealMatrix trainingMatrix,
-                final RealMatrix evaluationMatrix, final int maxTrainingRounds, final int earlyStoppingRounds);
+                final Map<String, Object> classifierParameters, final TruthSet trainingSet,
+                final TruthSet evaluationSet, final int maxTrainingRounds, final int earlyStoppingRounds);
 
+        /**
+         * return numDataRows x numClasses double[][] with probability each data point is a member of each class
+         */
         public abstract double[][] predictProbability(final RealMatrix matrix);
 
+        /**
+         * return true if the "quality" returned by trainAndReturnQualityTrace should be maximized, false if it should
+         * be minimized
+         */
         public abstract boolean getMaximizeEvalMetric(final Map<String, Object> classifierParameters);
 
-        /*
-        public defined methods
+        /* public defined methods. Can be overridden if more efficient routines are available for specific implementation */
+
+        /**
+         * Predict the probability that an individual data point is a member of each class
          */
         public double[] predictProbability(final double[] featureVector) {
             singlePredictWrapper[0] = featureVector;
@@ -127,6 +204,9 @@ public class MachineLearningUtils {
             return (predictProbability(matrix)[0]);
         }
 
+        /**
+         * Predict the class label for each data point (represented by matrix rows)
+         */
         public int[] predictClassLabels(final RealMatrix matrix) {
             final double [][] predictedProbabilities = predictProbability(matrix);
             final int [] predictedLabels = new int[predictedProbabilities.length];
@@ -149,12 +229,18 @@ public class MachineLearningUtils {
             return predictedLabels;
         }
 
+        /**
+         * Save classifier to file at specified path (via Kryo)
+         */
         public void save(final String saveFilePath) throws IOException {
             try(FileOutputStream fileOutputStream = new FileOutputStream(saveFilePath)) {
                 save(fileOutputStream);
             }
         }
 
+        /**
+         * Save classifier to specified FileOutputStream (via Kryo)
+         */
         public void save(final FileOutputStream fileOutputStream) {
             final Kryo kryo = new Kryo();
             final Output output = new Output(fileOutputStream);
@@ -162,12 +248,18 @@ public class MachineLearningUtils {
             output.close();
         }
 
+        /**
+         * Load classifier from file at specified path (via Kryo)
+         */
         public static GATKClassifier load(final String saveFilePath) throws IOException {
             try(FileInputStream fileInputStream = new FileInputStream(saveFilePath)) {
                 return load(fileInputStream);
             }
         }
 
+        /**
+         * Load classifier from specified FileInputStream (via Kryo)
+         */
         public static GATKClassifier load(final FileInputStream fileInputStream) {
             final Kryo kryo = new Kryo();
             final Input input = new Input(fileInputStream);
@@ -176,69 +268,123 @@ public class MachineLearningUtils {
             return classifier;
         }
 
+        /**
+         * Obtain optimal classifierParameters. Get quality estimates by calling trainAndReturnQualityTrace() with
+         * cross-validation. Select optimal number of training rounds (to be used when early stopping is not possible).
+         * @param classifierParameters Map (from parameter names to values) that will be passed to classifier
+         *                             initialization and/or training routine. Since map values are Objects, the
+         *                             classifier must keep track of their type. This must specify any parameters that
+         *                             will not be tuned. If there is overlap in keys between classifierParameters and
+         *                             tuneClassifierParameters, the tuned value will take precedence.
+         * @param tuneClassifierParameters Map (from parameter names to ClassifierParamRange) specifying values that
+         *                                 will be tuned, their range of allowed values, and how they are distributed
+         *                                 (float vs integer, linear vs log).
+         * @param classifierTuningStrategy enum specifying strategy for selecting candidate parameter values
+         * @param truthSet                 Data with matrix of features paired to correct class labels.
+         * @param random                   Random number generator.
+         * @param stratify                 Vector of integers listing stratification class. Cross-validation will split
+         *                                 data so that each stratify value has balanced number of instances in each
+         *                                 fold. If null, split randomly. It is highly desirable to stratify at least
+         *                                 based on class label.
+         * @param numCrossvalidationFolds  Must be >= 2
+         * @param maxTrainingRounds        Train classifiers with candidate hyperparameters for at most this many rounds.
+         * @param earlyStoppingRounds      Stop training if the best training quality was this many rounds ago.
+         * @param numTuningRounds          Try this many candidate hyperparameters before stopping and selecting the best.
+         * @return bestHyperparameters     classifierParameters updated with optimal values from tuneClassifierParameters.
+         */
         public Map<String, Object> tuneClassifierParameters(final Map<String, Object> classifierParameters,
                                                             final Map<String, ClassifierParamRange<?>> tuneClassifierParameters,
                                                             final ClassifierTuningStrategy classifierTuningStrategy,
-                                                            final RealMatrix trainMatrix, final Random random,
+                                                            final TruthSet truthSet, final Random random,
                                                             final int[] stratify, final int numCrossvalidationFolds,
                                                             final int maxTrainingRounds, final int earlyStoppingRounds,
                                                             final int numTuningRounds) {
             final List<TrainTestSplit> splits = new ArrayList<>(numCrossvalidationFolds);
             TrainTestSplit.getCrossvalidationSplits(
-                    numCrossvalidationFolds, trainMatrix.getRowDimension(), random, stratify
+                    numCrossvalidationFolds, truthSet.getNumRows(), random, stratify
             ).forEachRemaining(splits::add);
 
             final ClassifierTuner classifierTuner;
             switch(classifierTuningStrategy) {
                 case RANDOM:
                     classifierTuner = new RandomClassifierTuner(
-                            this, classifierParameters, tuneClassifierParameters, numTuningRounds, random
+                            this, classifierParameters, tuneClassifierParameters, truthSet,
+                            splits, maxTrainingRounds, earlyStoppingRounds, numTuningRounds, random
                     );
                     break;
                 default:
                     throw new IllegalStateException("Invalid ClassifierTuningStrategy: " + classifierTuningStrategy);
             }
 
-            return classifierTuner.getBestParameters(trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds);
+            return classifierTuner.getBestParameters();
 
         }
 
-        public int[] crossvalidatePredict(final RealMatrix dataMatrix, final Map<String, Object> classifierParameters,
+        /**
+         * Predict class labels using cross-validation, so classifier does not predict on data that it was trained on.
+         * @param truthSet           Matrix to predict on.
+         * @param classifierParameters Map (from parameter names to values) that will be passed to classifier
+         *                             initialization and/or training routine. Since map values are Objects, the
+         *                             classifier must keep track of their type. This must specify any parameters that
+         *                             will not be tuned. If there is overlap in keys between classifierParameters and
+         *                             tuneClassifierParameters, the tuned value will take precedence.
+         * @param random               Random number generator
+         * @param stratify             Vector of integers listing stratification class. Cross-validation will split data
+         *                             so that each stratify value has balanced number of instances in each fold. If
+         *                             null, split randomly. It is highly desirable to stratify at least based on class
+         *                             label.
+         * @param numCrossvalidationFolds  >= 2
+         */
+        public int[] crossvalidatePredict(final TruthSet truthSet, final Map<String, Object> classifierParameters,
                                           final Random random, final int[] stratify, final int numCrossvalidationFolds) {
-            final int[] predictedLabels = new int[dataMatrix.getRowDimension()];
+            final int[] predictedLabels = new int[truthSet.getNumRows()];
             final Iterator<TrainTestSplit> splitIterator = TrainTestSplit.getCrossvalidationSplits(
-                    numCrossvalidationFolds, dataMatrix.getRowDimension(), random, stratify
+                    numCrossvalidationFolds, truthSet.getNumRows(), random, stratify
             );
             while(splitIterator.hasNext()) {
                 final TrainTestSplit split = splitIterator.next();
                 // train on training data from this crossvalidation split
-                train(classifierParameters, sliceRows(dataMatrix, split.trainRows));
+                train(classifierParameters, truthSet.sliceRows(split.trainRows));
                 // predict on testing data from this split
-                final int[] predictedTestLabels = predictClassLabels(sliceRows(dataMatrix, split.testRows));
+                final int[] predictedTestLabels = predictClassLabels(sliceRows(truthSet.features, split.testRows));
                 // and assign those values into the final predictions
                 sliceAssign(predictedLabels, split.testRows, predictedTestLabels);
             }
             return predictedLabels;
         }
 
+        /**
+         * Choose the number of threads to obtain fastest training times. Update classifierParameters with the
+         * appropriate value for the number of threads.
+         * @param classifierParameters Map (from parameter names to values) that will be passed to classifier
+         *                             initialization and/or training routine. Since map values are Objects, the
+         *                             classifier must keep track of their type. This must specify any parameters that
+         *                             will not be tuned. If there is overlap in keys between classifierParameters and
+         *                             tuneClassifierParameters, the tuned value will take precedence.
+         * @param numThreadsKey  Key name in classifierParameters for number of threads.
+         * @param truthSet Data to obtain training times from. Ideally this data should have similar structure to
+         *                       actual data (there is no reason you can't subsequently train on it). Note that a small
+         *                       subset of the data will be selected, so that training times are short and this routine
+         *                       does not waste a lot of time.
+         */
         public void chooseNumThreads(final Map<String, Object> classifierParameters, final String numThreadsKey,
-                                     final RealMatrix trainingMatrix) {
+                                     final TruthSet truthSet) {
             final int numCalibrationRows = NUM_CALIBRATION_CLASS_ROWS * 2;
             localLogger.info("numCalibrationRows = " + numCalibrationRows);
-            localLogger.info("numTrainingRows = " + trainingMatrix.getRowDimension());
-            final RealMatrix calibrationMatrix;
-            if(trainingMatrix.getRowDimension() <= numCalibrationRows) {
-                calibrationMatrix = trainingMatrix;
+            localLogger.info("numTrainingRows = " + truthSet.getNumRows());
+            final TruthSet calibrationMatrix;
+            if(truthSet.getNumRows() <= numCalibrationRows) {
+                calibrationMatrix = truthSet;
             } else {
-                final int[] stratify = getClassLabels(trainingMatrix);
-                localLogger.info("trainingFraction = " + numCalibrationRows / (double)trainingMatrix.getRowDimension());
+                final int[] stratify = truthSet.classLabels;
+                localLogger.info("trainingFraction = " + numCalibrationRows / (double)truthSet.getNumRows());
                 final TrainTestSplit trainTestSplit = TrainTestSplit.getTrainTestSplit(
-                        numCalibrationRows / (double)trainingMatrix.getRowDimension(),
-                        trainingMatrix.getRowDimension(), new Random(), stratify
+                        numCalibrationRows / (double)truthSet.getNumRows(),
+                        truthSet.getNumRows(), new Random(), stratify
                 );
                 localLogger.info("numTrain = " + trainTestSplit.trainRows.length);
                 localLogger.info("numTest = " + trainTestSplit.testRows.length);
-                calibrationMatrix = sliceRows(trainingMatrix, trainTestSplit.trainRows);
+                calibrationMatrix = truthSet.sliceRows(trainTestSplit.trainRows);
             }
             final Map<String, Object> calibrationParams = new HashMap<>(classifierParameters);
             calibrationParams.put(NUM_TRAINING_ROUNDS_KEY, NUM_CALIBRATION_TRAINING_ROUNDS);
@@ -264,22 +410,22 @@ public class MachineLearningUtils {
         /*
         private methods
          */
-        private long getTrainingTime(final Map<String, Object> classifierParameters, final RealMatrix trainingMatrix) {
+        private long getTrainingTime(final Map<String, Object> classifierParameters, final TruthSet truthSet) {
             final long startTime = System.nanoTime();
-            train(classifierParameters, trainingMatrix);
+            train(classifierParameters, truthSet);
             return System.nanoTime() - startTime;
         }
 
         private double[][] getCrossvalidatedTrainingTraces(final Map<String, Object> classifierParameters,
-                                                          final RealMatrix trainMatrix, final List<TrainTestSplit> splits,
+                                                          final TruthSet truthSet, final List<TrainTestSplit> splits,
                                                           final int maxTrainingRounds, final int earlyStoppingRounds) {
             final int numCrossvalidationFolds = splits.size();
             double[][] trainingTraces = new double[numCrossvalidationFolds][];
             for(int fold = 0; fold < numCrossvalidationFolds; ++fold) {
                 final TrainTestSplit split = splits.get(fold);
                 trainingTraces[fold] = trainAndReturnQualityTrace(
-                        classifierParameters, sliceRows(trainMatrix, split.trainRows),
-                        sliceRows(trainMatrix, split.testRows), maxTrainingRounds, earlyStoppingRounds
+                        classifierParameters, truthSet.sliceRows(split.trainRows), truthSet.sliceRows(split.testRows),
+                        maxTrainingRounds, earlyStoppingRounds
                 );
             }
             return trainingTraces;
@@ -324,6 +470,10 @@ public class MachineLearningUtils {
         }
     }
 
+    /**
+     * Class that holds partitions of data sets (by row). trainRows and testRows are row indices into original data set,
+     * appropriate for passing to sliceRows()
+     */
     public static class TrainTestSplit {
         public final int[] trainRows;
         public final int[] testRows;
@@ -334,6 +484,17 @@ public class MachineLearningUtils {
         }
 
 
+        /**
+         * Static method to split data into two sets: training set and testing set.
+         * @param trainingFraction proportion in [0, 1] of original data that should be placed in training set.
+         * @param numRows          number of rows of original data
+         * @param random           random number generator
+         * @param stratify         Vector of integers listing stratification class. Data will be split so that each
+         *                         stratify value has balanced number of instances in each set (e.g. proportion of
+         *                         rows with stratify == 3 in training set will be approximately trainingFraction). If
+         *                         null, split randomly. It is highly desirable to stratify at least based on class label.
+         * @return TrainTestSplit with appropriate assigned indices.
+         */
         public static TrainTestSplit getTrainTestSplit(final double trainingFraction, final int numRows,
                                                        final Random random, final int[] stratify) {
             if(stratify != null && stratify.length != numRows) {
@@ -381,6 +542,16 @@ public class MachineLearningUtils {
             return new TrainTestSplit(trainRows, testRows);
         }
 
+        /**
+         * Static method to get iterator over partitions of data, for implementing k-fold cross-validation.
+         * @param numCrossvalidationFolds >= 2
+         * @param numRows          number of rows in original data set
+         * @param random           random number generator
+         * @param stratify         Vector of integers listing stratification class. Cross-validation will split data so
+         *                         that each stratify value has balanced number of instances in each fold. If null,
+         *                         split randomly. It is highly desirable to stratify at least based on class label.
+         * @return
+         */
         public static Iterator<TrainTestSplit> getCrossvalidationSplits(final int numCrossvalidationFolds, final int numRows,
                                                                         final Random random, final int[] stratify) {
             if(numCrossvalidationFolds < 2) {
@@ -398,6 +569,11 @@ public class MachineLearningUtils {
             return new FoldSplitIterator(split_index_ordering, numCrossvalidationFolds);
         }
 
+        /**
+         * Get ordering of data so that evenly distributing rows according to this order causes sampling that is
+         * a) balanced in each stratify value
+         * b) randomly-ordered within each stratify value
+         */
         private static int[] getStratfiedIndexOrdering(final Random random, final int[] stratify) {
             /*
             logical (but memory inefficient) process
@@ -468,37 +644,65 @@ public class MachineLearningUtils {
     // To-do: write ClassifierTuner with strategy = BAYES
     public enum ClassifierTuningStrategy { RANDOM }
 
+    /**
+     * Abstract base class for tuning classifier hyperparameters. The base class manages keeping track of previously
+     * seen / best hyperparameters and corresponding scores. Actual classifier tuners must extend ClassifierTuner
+     * and override chooseNextHyperparameters(). Note, this should probably always be called by tuneClassifierParameters()
+     * rather than instantiated directly.
+     */
     static abstract class ClassifierTuner {
         private final GATKClassifier classifier;
         protected final Map<String, Object> classifierParameters;
         protected final Map<String, ClassifierParamRange<?>> tuneParameters;
-        protected final int numTuningRounds;
-        protected final boolean maximizeEvalMetric;
         protected final List<Map<String, Object>> hyperparameterSets;
         protected final List<Double> hyperparameterScores;
+        protected final boolean maximizeEvalMetric;
+
+        // keep these as class members instead of locals so that chooseNextHyperparameters() can see them if it needs to
+        protected Map<String, Object> bestParameters;
+        protected double bestScore;
+        protected int numTuningRounds;
+
+        private final TruthSet truthSet;
+        private final List<TrainTestSplit> splits;
+        private final int maxTrainingRounds;
+        private final int earlyStoppingRounds;
 
         ClassifierTuner(final GATKClassifier classifier, final Map<String, Object> classifierParameters,
-                        final Map<String, ClassifierParamRange<?>> tuneParameters,
+                        final Map<String, ClassifierParamRange<?>> tuneParameters, final TruthSet truthSet,
+                        final List<TrainTestSplit> splits, final int maxTrainingRounds, final int earlyStoppingRounds,
                         final int numTuningRounds) {
             if(numTuningRounds < 1) {
                 throw new IllegalArgumentException("numTuningRounds (" + numTuningRounds + ") must be >= 1");
             }
+
             this.classifier = classifier;
             this.tuneParameters = tuneParameters;
-            this.numTuningRounds = numTuningRounds;
-            this.hyperparameterSets = new ArrayList<> ();
+            this.hyperparameterSets = new ArrayList<>();
             this.hyperparameterScores = new ArrayList<>();
             this.classifierParameters = classifierParameters;
-            this.maximizeEvalMetric = classifier.getMaximizeEvalMetric(classifierParameters);
+
+            this.truthSet = truthSet;
+            this.splits = splits;
+            this.maxTrainingRounds = maxTrainingRounds;
+            this.earlyStoppingRounds = earlyStoppingRounds;
+            this.numTuningRounds = numTuningRounds;
+
+            maximizeEvalMetric = classifier.getMaximizeEvalMetric(classifierParameters);
+            bestParameters = null;
+            bestScore = maximizeEvalMetric ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
         }
 
+        /**
+         * Return next candidate set of hyperparameters
+         */
         abstract protected Map<String, Object> chooseNextHyperparameters();
 
-        Map<String, Object> getBestParameters(final RealMatrix trainMatrix, final List<TrainTestSplit> splits,
-                                              final int maxTrainingRounds, final int earlyStoppingRounds) {
-            Map<String, Object> bestParameters = null;
-            double bestScore = maximizeEvalMetric ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
-
+        /**
+         * Try multiple candidate hyperparameters (chosen according to strategy in non-abstract ClassifierTuner derived
+         * class). Keep track of best, and after numTuningRounds candidates have been tried, return the best hyperparameters
+         */
+        Map<String, Object> getBestParameters() {
             MachineLearningUtils.localLogger.info("Getting best parameters");
             ConsoleProgressBar progress = new ConsoleProgressBar(numTuningRounds);
             for(int i = 0; i < numTuningRounds; ++i) {
@@ -507,7 +711,7 @@ public class MachineLearningUtils {
                 final Map<String, Object> testParameters = new HashMap<>(classifierParameters);
                 testParameters.putAll(hyperparameters);
                 final double[][] trainingTraces = classifier.getCrossvalidatedTrainingTraces(
-                        testParameters, trainMatrix, splits, maxTrainingRounds, earlyStoppingRounds
+                        testParameters, truthSet, splits, maxTrainingRounds, earlyStoppingRounds
                 );
                 final double score = classifier.getTrainingScore(testParameters, trainingTraces);
                 hyperparameterScores.add(score);
@@ -525,12 +729,24 @@ public class MachineLearningUtils {
         }
     }
 
+    /**
+     * Concrete ClassifierTuner that selects hyperparameters randomly. Specifically:
+     * 1) each parameter value is sampled evenly (log or linear) along its range, with numTuningRounds samples.
+     * 2) these samples are permuted into random order
+     * 3) different parameter values are permuted independently
+     * The result is an even sampling in the hyper-rectangle, but with less clumping. Unimportant parameters (e.g. those
+     * that don't affect quality) will not decrease sample density in important parameters. Thus this method should
+     * outperform grid search with an equivalent numTuningRounds.
+     */
     static class RandomClassifierTuner extends ClassifierTuner {
         private final Map<String, Object[]> randomParameters;
+
         RandomClassifierTuner(final GATKClassifier classifier, final Map<String, Object> classifierParameters,
-                              final Map<String, ClassifierParamRange<?>> tuneParameters, final int numTuningRounds,
-                              final Random random) {
-            super(classifier, classifierParameters, tuneParameters, numTuningRounds);
+                              final Map<String, ClassifierParamRange<?>> tuneParameters, final TruthSet truthSet,
+                              final List<TrainTestSplit> splits, final int maxTrainingRounds,
+                              final int earlyStoppingRounds, final int numTuningRounds, final Random random) {
+            super(classifier, classifierParameters, tuneParameters, truthSet, splits, maxTrainingRounds,
+                    earlyStoppingRounds, numTuningRounds);
             randomParameters = tuneParameters.entrySet().stream().collect(
                     Collectors.toMap(
                             Map.Entry::getKey,
@@ -553,10 +769,16 @@ public class MachineLearningUtils {
     }
 
 
+    /**
+     * Interface for classifier parameter range.
+     */
     public interface ClassifierParamRange<T> {
         T[] getRandomSamples(final Random random, final int numSamples);
     }
 
+    /**
+     * Class for double-valued ClassifierParamRange with linear (uniform) sampling across range
+     */
     public static class ClassifierLinearParamRange implements ClassifierParamRange<Double> {
         private final double low;
         private final double high;
@@ -592,6 +814,9 @@ public class MachineLearningUtils {
         }
     }
 
+    /**
+     * Class for double-valued ClassifierParamRange with logarithmic sampling across range
+     */
     public static class ClassifierLogParamRange implements ClassifierParamRange<Double> {
         private final double low;
         private final double high;
@@ -630,6 +855,9 @@ public class MachineLearningUtils {
         }
     }
 
+    /**
+     * Class for integer-valued ClassifierParamRange with linear (uniform) sampling across range
+     */
     public static class ClassifierIntegerLinearParamRange implements ClassifierParamRange<Integer> {
         private final int low;
         private final int high;
@@ -665,6 +893,9 @@ public class MachineLearningUtils {
         }
     }
 
+    /**
+     * Class for integer-valued ClassifierParamRange with logarithmic sampling across range
+     */
     public static class ClassifierIntegerLogParamRange implements ClassifierParamRange<Integer> {
         private final int low;
         private final int high;
@@ -703,6 +934,10 @@ public class MachineLearningUtils {
         }
     }
 
+    /**
+     * Progress bar for console programs; to show work done, work to-do, elapsed time, and estimated remaining time for
+     * long-running tasks. It avoids redrawing too frequently, so as to prevent slowing progress of actual work.
+     */
     public static class ConsoleProgressBar {
         private static final long MIN_UPDATE_INTERVAL_NS = 500000000; // = 0.5 sec
         private static final int NUM_BAR_CHARACTERS = 10;
@@ -720,6 +955,10 @@ public class MachineLearningUtils {
         private int maxOutputLength;
         private final String updateInfoFormat;
 
+        /**
+         * Create progress bar
+         * @param workToDo sum of amount of work for all tasks. Usually this will just be number of tasks.
+         */
         ConsoleProgressBar(final long workToDo) {
             if(workToDo <= 0) {
                 throw new IllegalArgumentException("workToDo must be > 0");
@@ -736,6 +975,11 @@ public class MachineLearningUtils {
             drawBar(0.0, Double.NaN);
         }
 
+        /**
+         * Update the progress bar. Re-draw if enough time has elapsed.
+         * @param workJustCompleted This value can be altered if different tasks have quantifiable differences in the
+         *                          amount of work (or time) they will take. Probably this will normally just equal 1.
+         */
         public void update(final long workJustCompleted) {
             if(workJustCompleted <= 0) {
                 throw new IllegalArgumentException("workJustCompleted must be > 0");
@@ -811,6 +1055,11 @@ public class MachineLearningUtils {
         }
     }
 
+    /* here are multiple static functions that are generally useful for machine-learning tasks. Kept public to encourage re-use */
+
+    /**
+     * Return Integer array with elements {0, 1, 2, ..., numElements - 1}
+     */
     public static Integer[] getRange(final Integer numElements) {
         if(numElements < 0) {
             throw new IllegalArgumentException("numElements must be >= 0");
@@ -822,6 +1071,9 @@ public class MachineLearningUtils {
         return range;
     }
 
+    /**
+     * Return int array with elements {0, 1, 2, ..., numElements - 1}
+     */
     public static int[] getRange(final int numElements) {
         if(numElements < 0) {
             throw new IllegalArgumentException("numElements must be >= 0");
@@ -829,6 +1081,10 @@ public class MachineLearningUtils {
         return IntStream.range(0, numElements).toArray();
     }
 
+    /**
+     * Dereference array and return new array sampled from the array of supplied indices
+     * @return arr[indices]
+     */
     public static int[] slice(final int[] arr, final int[] indices) {
         final int[] sliced_arr = new int[indices.length];
         for(int i = 0; i < indices.length; ++i) {
@@ -837,6 +1093,9 @@ public class MachineLearningUtils {
         return sliced_arr;
     }
 
+    /**
+     * Dereference array and assign new values into the supplied indices: arr[indices] = newValues
+     */
     public static void sliceAssign(final int[] arr, final int[] indices, final int[] newValues) {
         if(indices.length != newValues.length) {
             throw new IllegalArgumentException("length of indices does not match length of newValues");
@@ -846,6 +1105,9 @@ public class MachineLearningUtils {
         }
     }
 
+    /**
+     * Find index to maximum value in array
+     */
     public static int argmax(final double[] arr) {
         int bestIndex = -1;
         double bestValue = Double.MIN_VALUE;
@@ -858,6 +1120,9 @@ public class MachineLearningUtils {
         return bestIndex;
     }
 
+    /**
+     * Join to RealMatrices together so that columns of A come first, then columns of B.
+     */
     public static RealMatrix concatenateColumns(final RealMatrix matrixA, final RealMatrix matrixB) {
         if(matrixA.getRowDimension() != matrixB.getRowDimension()) {
             throw new IllegalArgumentException("matrixA and matrixB do not have same number of rows.");
@@ -871,19 +1136,27 @@ public class MachineLearningUtils {
         return matrixC;
     }
 
+    /**
+     * Return int array of indices that would sort supplied array, e.g. in pseudocode: arr[argsort(arr)] == sort(arr)
+     */
     public static int[] argsort(final int[] arr) {
         final Integer[] sortIndices = getRange((Integer)arr.length);
         Arrays.sort(sortIndices, Comparator.comparingInt(ind -> arr[ind]));
         return ArrayUtils.toPrimitive(sortIndices);
     }
 
+    /**
+     * Return int array of indices that would sort supplied array, e.g. in pseudocode: arr[argsort(arr)] == sort(arr)
+     */
     public static <T extends Comparable<? super T>> int[] argsort(final T[] arr) {
         final Integer[] sortIndices = getRange((Integer)arr.length);
         Arrays.sort(sortIndices, Comparator.comparing(ind -> arr[ind]));
         return ArrayUtils.toPrimitive(sortIndices);
     }
 
-
+    /**
+     * Return random permutation of elements {0, 1, ..., numElements - 1}, using Knuth shuffle algorithm.
+     */
     public static int[] getRandomPermutation(final Random random, final int numElements) {
         // Knuth shuffle
         final int[] permutation = getRange(numElements);
@@ -896,12 +1169,45 @@ public class MachineLearningUtils {
         return permutation;
     }
 
+    /**
+     * Geven predicted and correct labels, return proportion of predictions that are correct
+     */
+    public static double getPredictionAccuracy(final int[] predictedLabels, final int[] correctLabels) {
+        int numCorrect = 0;
+        for(int row = 0; row < correctLabels.length; ++row) {
+            if(predictedLabels[row] == correctLabels[row]) {
+                ++numCorrect;
+            }
+        }
+        return numCorrect / (double)correctLabels.length;
+    }
 
+    /**
+     * Convert stratify matrix to stratify array. Columns are binned and stratify array values are obtained by finding
+     * unique rows.
+     * @param stratifyMatrix matrix to convert to stratify array
+     * @param numBins Number of bins into which to group values in each column
+     * @param minCountsPerStratifyValue Minimum number of instances of each unique row. If any rows occur too few times,
+     *                                  the number of columns in consideration is reduced and the under-count rows are
+     *                                  searched again for unique values.
+     * @return stratifyArray, int array with length = number of rows in stratifyMatrix
+     */
     public static int[] stratifyMatrixToStratifyArray(final RealMatrix stratifyMatrix, final int numBins,
                                                       final int minCountsPerStratifyValue) {
         return stratifyMatrixToStratifyArray(stratifyMatrix, numBins, minCountsPerStratifyValue, new ArrayList<>());
     }
 
+    /**
+     * Convert stratify matrix to stratify array. Columns are binned and stratify array values are obtained by finding
+     * unique rows. This version can specify some columns as categorical (unbinnable).
+     * @param stratifyMatrix matrix to convert to stratify array
+     * @param numBins Number of bins into which to group values in each column
+     * @param minCountsPerStratifyValue Minimum number of instances of each unique row. If any rows occur too few times,
+     *                                  the number of columns in consideration is reduced and the under-count rows are
+     *                                  searched again for unique values.
+     * @param categoricalColumns Columns in categoricalColumns are not binned.
+     * @return stratifyArray, int array with length = number of rows in stratifyMatrix
+     */
     public static int[] stratifyMatrixToStratifyArray(final RealMatrix stratifyMatrix, final int numBins,
                                                       final int minCountsPerStratifyValue,
                                                       final Collection<Integer> categoricalColumns) {
@@ -970,6 +1276,10 @@ public class MachineLearningUtils {
         return stratifyArray;
     }
 
+    /**
+     * Find unique values in column array, and return integer codes corresponding to those unique values
+     * @return int array of length column.length, with values in range {0, 1, ..., numUniqueValues - 1}
+     */
     private static int[] getCategoryCodes(final double[] column) {
         final int[] categoryCodes = new int[column.length];
         final Map<Double, Integer> codesMap = new HashMap<>();
@@ -986,6 +1296,15 @@ public class MachineLearningUtils {
         return categoryCodes;
     }
 
+    /**
+     * Bin column by
+     * 1) choosing bins by sampling evenly in percentile space
+     * 2) using bisection to map each value into its appropriate bin.
+     * If NaN values are present, they are placed in highest bin.
+     * @param column array of values to bin
+     * @param numBins number of bins to distribute values into (e.g. number of unique integer values of output array)
+     * @return int array with length column.length and values in {0, 1, ..., numBins-1}
+     */
     private static int[] getBinnedColumn(final double[] column, final int numBins) {
         final int numUniqueColumnValues = (int)DoubleStream.of(column).distinct().count();
         if(numUniqueColumnValues <= numBins) {
@@ -1008,6 +1327,14 @@ public class MachineLearningUtils {
         ).toArray();
     }
 
+    /**
+     * Return samples from Percentile object that are evenly-distributed in percentile space.
+     * @param column array with values to sample from
+     * @param numPercentiles Number of values to sample. If fewer than requested unique percentiles are found (if some
+     *                       values repeat), sampling density will be increased to attempt to find the requested number.
+     * @return array of length <= numPercentiles with values drawn from column that are approximately even in percentile
+     *         space.
+     */
     private static double[] getUniquePercentiles(final double[] column, final int numPercentiles) {
         final int numNaN = (int)Arrays.stream(column).filter(Double::isNaN).count();
         final int numSortablePercentiles = numNaN == 0 ? numPercentiles : numPercentiles - 1;
@@ -1050,7 +1377,15 @@ public class MachineLearningUtils {
         return percentiles;
     }
 
+    /**
+     * Return samples from Percentile object that are evenly-distributed in percentile space.
+     * @param percentileEvaluator Percentile object that previously had setData() called to assign data.
+     * @param numPercentiles >= 2
+     */
     private static final double[] percentileSpace(final Percentile percentileEvaluator, final int numPercentiles) {
+        if(numPercentiles < 2) {
+            throw new IllegalArgumentException("numPercentiles must be >= 2");
+        }
         final double low = 50.0 / percentileEvaluator.getData().length;
         final double high = 100.0 - low;
         final double coef = (high - low) / (numPercentiles - 1);
@@ -1059,6 +1394,14 @@ public class MachineLearningUtils {
     }
 
 
+    /**
+     * Find unique rows, and return set with indices to rows in original data
+     * @param binnedStratifyMatrix  int[][] representation of data matrix
+     * @param checkRows       only look for unique rows indexed by checkRows
+     * @param useNumColumns   when checking for uniqueness, only consider columns in {0, 1, , ..., numUseColumns - 1}
+     * @return set where each element is a list of row indices (from checkRows) so that for each row in the list,
+     *         binnedStratifyMatrix[row] is identical.
+     */
     private static Set<List<Integer>> getUniqueRows(final int[][] binnedStratifyMatrix,
                                                     final List<Integer> checkRows,
                                                     final int useNumColumns) {
@@ -1079,15 +1422,4 @@ public class MachineLearningUtils {
 
         return new HashSet<>(uniqueResultMap.values());
     }
-
-    public static double getPredictionAccuracy(final int[] predictedLabels, final int[] correctLabels) {
-        int numCorrect = 0;
-        for(int row = 0; row < correctLabels.length; ++row) {
-            if(predictedLabels[row] == correctLabels[row]) {
-                ++numCorrect;
-            }
-        }
-        return numCorrect / (double)correctLabels.length;
-    }
 }
-

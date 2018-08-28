@@ -13,81 +13,57 @@ import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.*;
 
 
 /**
- * (Internal) Trains classifier for filtering BreakpointEvidence, and produces supporting files for testing"
+ * <p>(Internal) Demo of XGBoostUtils + MachineLearningUtils: trains classifier on data in .csv file and saves classifier to binary file</p>
  *
- * <p>This tool trains a classifier used to filter BreakpointEvidence, discarding evidence that is unlikely to overlap
- * the break point of a structural variant, and passing the rest (which will be combined via overlap to form
- * assembly intervals).</p>
- * After training the classifier, the model file is saved, along with supporting files that are used in unit" +
- * or integration tests.</p>
- *
- * <h3>Inputs</h3>
+ * <p><h3>Inputs</h3>
  * <ul>
- *     <li>A SAM/BAM/CRAM file of paired-end, aligned and coordinate-sorted reads.</li>
- *     <li>A BWA index image for the reference.
- *         You can use BwaMemIndexImageCreator to create the index image file.</li>
- *     <li>A list of ubiquitous kmers to ignore.
- *         You can use FindBadGenomicGenomicKmersSpark to create the list of kmers to ignore.</li>
+ *     <li>A csv file of numeric data, with first column being class labels.</li>
  * </ul>
  *
  * <h3>Output</h3>
  * <ul>
- *     <li>A file of aligned contigs.</li>
+ *     <li>A binary file that stores a trained classifier.</li>
  * </ul>
  *
  * <h3>Usage example</h3>
  * <pre>
- *   gatk FindBreakpointEvidenceSpark \
- *     -I input_reads.bam \
- *     --aligner-index-image reference.img \
- *     --kmers-to-ignore ignored_kmers.txt \
- *     -O assemblies.sam
- * </pre>
- * <p>This tool can be run without explicitly specifying Spark options. That is to say, the given example command
- * without Spark options will run locally. See
- * <a href ="https://software.broadinstitute.org/gatk/documentation/article?id=10060">Tutorial#10060</a>
- * for an example of how to set up and run a Spark tool on a cloud Spark cluster.</p>
+ *   gatk ExampleTrainXGBoostClassifier \
+ *     -I input_data.csv \
+ *     -O classifier.model
+ * </pre></p>
  *
- * <h3>Caveats</h3>
- * <p>Expected input is a paired-end, coordinate-sorted BAM with around 30x coverage.
+ * <p><h3>Caveats</h3>
+ * <li>This tool uses xgboost's multi-threading. The user can pass --nthread to set the number of threads.</li>
+ * <li>If --auto-select-nthread is passed, then nthread sets the upper bound on threads to use, and the actual value
+ * will be obtained by finding the best performance when repeatedly solving a small test problem using varying numbers
+ * of threads.</li>
+ * <li>Because this tool is multi-threaded, it must be used on a single computer (not a multi-computer cluster).
+ * However, the classifiers are KryoSerializable, so trained classifiers can be used to predict probabilities or class
+ * labels in a spark environment.</li>
  * Coverage much lower than that probably won't work well.</p>
  */
 @DocumentedFeature
 @BetaFeature
 @CommandLineProgramProperties(
-        oneLineSummary = "(Internal) Trains classifier for filtering BreakpointEvidence, and produces supporting files for testing",
-        summary =
-                "This tool trains a classifier used to filter BreakpointEvidence, discarding evidence that is unlikely to overlap" +
-                        " the break point of a structural variant, and passing the rest (which will be combined via overlap to form" +
-                        " assembly intervals)." +
-                        " After training the classifier, the model file is saved, along with supporting files that are used in unit" +
-                        " or integration tests.",
+        oneLineSummary = "Demo of XGBoostUtils + MachineLearningUtils: trains classifier on data in .csv file and saves classifier to binary file",
+        summary = "This tool tunes hyperparameters, assesses classifier quality, and trains a classifier to predict class" +
+                        " membership from data provided in a .csv file. The trained classifier is saved to a binary model file.",
         programGroup = StructuralVariantDiscoveryProgramGroup.class)
 public class ExampleTrainXGBoostClassifier extends CommandLineProgram {
     private static final long serialVersionUID = 1L;
     private static final Logger localLogger = LogManager.getLogger(ExampleTrainXGBoostClassifier.class);
 
-    private static final String CURRENT_DIRECTORY = System.getProperty("user.dir");
-    private static final String gatkDirectory = System.getProperty("gatkdir", CURRENT_DIRECTORY) + "/";
-    private static final String publicTestDirRelative = "src/test/resources/";
-    public static final String publicTestDir = new File(gatkDirectory, publicTestDirRelative).getAbsolutePath() + "/";
-
-    /**
-     * Demo stuff STARTS here....
-     */
-    @Argument(doc = "path to SVM-light sparse data files, used to load demo classifier data for testing and training."+
-            " Folder should contain one train.txt file and one test.txt file.",
+    @Argument(doc = "path to .csv file storing data to train classifier. It is expected that the file will have all numeric" +
+            "values, and the first column will contain class label.",
             fullName = StandardArgumentDefinitions.INPUT_LONG_NAME, shortName = StandardArgumentDefinitions.INPUT_SHORT_NAME)
     private String demoDataFile;
 
-    @Argument(doc = "path to SVM-light sparse data files, used to load demo classifier data for testing and training."+
-            " Folder should contain one train.txt file and one test.txt file.",
+    @Argument(doc = "full path to save output (binary) classifier model file.",
             fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME)
     private String classifierModelFile;
 
@@ -144,8 +120,28 @@ public class ExampleTrainXGBoostClassifier extends CommandLineProgram {
     @Override
     protected Object doWork() {
         localLogger.info("Loading demo data");
-        final RealMatrix dataMatrix = MachineLearningUtils.loadCsvFile(demoDataFile);
+        final MachineLearningUtils.TruthSet truthSet = MachineLearningUtils.loadCsvFile(demoDataFile);
 
+        // tune hyperparameters, assess cross-validated classifier accuracy, train final classifier
+        final MachineLearningUtils.GATKClassifier classifier = trainClassifierAndAssessAccuracy(truthSet);
+
+        localLogger.info("Saving final classifier to " + classifierModelFile);
+        try {
+            classifier.save(classifierModelFile);
+        } catch(IOException err) {
+            throw new GATKException(err.getClass() + ": " + err.getMessage());
+        }
+
+        // load trained classifier from disk, and use it to predict class membership probabilities, or class labels
+        loadClassifierAndPredictClass(truthSet.features);
+
+        return classifier;
+    }
+
+    /**
+     * Demo tuning hyperparameters, assessing classifier accuracy, and training final classifier
+     */
+    private MachineLearningUtils.GATKClassifier trainClassifierAndAssessAccuracy(final MachineLearningUtils.TruthSet truthSet) {
         if(hyperparameterTuningProportion == null) {
             // This proportion produces the fastest training times overall, not necessarily the most useful results.
             hyperparameterTuningProportion = 1.0 / (1.0 + numTuningRounds);
@@ -157,16 +153,18 @@ public class ExampleTrainXGBoostClassifier extends CommandLineProgram {
                 numCrossvalidationFolds
                 : (int)Math.ceil(numCrossvalidationFolds / Math.min(hyperparameterTuningProportion, 1.0 - hyperparameterTuningProportion));
         localLogger.info("Stratifying data matrix to balance data splitting / cross-validation folds.");
-        final int[] stratify = MachineLearningUtils.stratifyMatrixToStratifyArray(dataMatrix, 5, minCountsPerStratifyValue);
+        final int[] stratify = MachineLearningUtils.stratifyMatrixToStratifyArray(
+                truthSet.features, 5, minCountsPerStratifyValue
+        );
 
 
         localLogger.info("Splitting data");
         final MachineLearningUtils.TrainTestSplit hyperSplit = MachineLearningUtils.TrainTestSplit.getTrainTestSplit(
-                hyperparameterTuningProportion, dataMatrix.getRowDimension(), random, stratify
+                hyperparameterTuningProportion, truthSet.getNumRows(), random, stratify
         );
-        final RealMatrix tuneMatrix = MachineLearningUtils.sliceRows(dataMatrix, hyperSplit.trainRows);
+        final MachineLearningUtils.TruthSet tuneSet = truthSet.sliceRows(hyperSplit.trainRows);
         final int[] tuneStratify = MachineLearningUtils.slice(stratify, hyperSplit.trainRows);
-        final RealMatrix validateMatrix = MachineLearningUtils.sliceRows(dataMatrix, hyperSplit.testRows);
+        final MachineLearningUtils.TruthSet validateSet = truthSet.sliceRows(hyperSplit.testRows);
         final int[] validateStratify = MachineLearningUtils.slice(stratify, hyperSplit.testRows);
 
         localLogger.info("Creating classifier object");
@@ -177,7 +175,7 @@ public class ExampleTrainXGBoostClassifier extends CommandLineProgram {
         classifierParameters.put(XGBoostUtils.NUM_THREADS_KEY, numThreads);
         classifierParameters.put(XGBoostUtils.EVAL_METRIC_KEY, evalMetric);
         if(autoSelectNumThreads) {
-            classifier.chooseNumThreads(classifierParameters, XGBoostUtils.NUM_THREADS_KEY, tuneMatrix);
+            classifier.chooseNumThreads(classifierParameters, XGBoostUtils.NUM_THREADS_KEY, tuneSet);
             localLogger.info("Chose " + classifierParameters.get(XGBoostUtils.NUM_THREADS_KEY) + " threads");
         } else {
             localLogger.info("User selected " + classifierParameters.get(XGBoostUtils.NUM_THREADS_KEY) + " threads");
@@ -186,11 +184,11 @@ public class ExampleTrainXGBoostClassifier extends CommandLineProgram {
         // Note: tuning hyperparameters is basically always necessary: if data has changed enough to merit training a
         // new classifier, then it merits finding the new best hyperparameters
         final Map<String, Object> bestClassifierParameters;
-        if(tuneMatrix.getRowDimension() > 0) {
+        if(tuneSet.getNumRows() > 0) {
             localLogger.info("Tuning hyperparameters");
             bestClassifierParameters = classifier.tuneClassifierParameters(
                     classifierParameters, XGBoostUtils.DEFAULT_TUNING_PARAMETERS, classifierTuningStrategy,
-                    tuneMatrix, random, tuneStratify, numCrossvalidationFolds, maxTrainingRounds, earlyStoppingRounds,
+                    tuneSet, random, tuneStratify, numCrossvalidationFolds, maxTrainingRounds, earlyStoppingRounds,
                     numTuningRounds
             );
             localLogger.info("bestClassifierParameters: " + bestClassifierParameters.toString());
@@ -202,14 +200,14 @@ public class ExampleTrainXGBoostClassifier extends CommandLineProgram {
         // note cross-validation is necessary if you want to estimate the accuracy of the new classifier. If you don't
         // care (e.g. are committed to using the classifier regardless) then you can set hyperparameterTuningProportion
         // to 1.0, or skip splitting the data and just tune on the whole set.
-        if(validateMatrix.getRowDimension() > 0) {
+        if(validateSet.getNumRows() > 0) {
             localLogger.info("Cross-val predicting");
             final int[] predictedTestLabels = classifier.crossvalidatePredict(
-                    validateMatrix, bestClassifierParameters, random, validateStratify, numCrossvalidationFolds
+                    validateSet, bestClassifierParameters, random, validateStratify, numCrossvalidationFolds
             );
 
             final double accuracy = MachineLearningUtils.getPredictionAccuracy(
-                    predictedTestLabels, MachineLearningUtils.getClassLabels(validateMatrix)
+                    predictedTestLabels, validateSet.classLabels
             );
             localLogger.info("Crossvalidated accuracy = " + String.format("%.1f%%", 100.0 * accuracy));
         } else {
@@ -217,15 +215,15 @@ public class ExampleTrainXGBoostClassifier extends CommandLineProgram {
         }
 
         localLogger.info("Training final classifier");
-        classifier.train(bestClassifierParameters, dataMatrix);
+        classifier.train(bestClassifierParameters, truthSet);
+        return classifier;
+    }
 
-        localLogger.info("Saving final classifier to " + classifierModelFile);
-        try {
-            classifier.save(classifierModelFile);
-        } catch(IOException err) {
-            throw new GATKException(err.getClass() + ": " + err.getMessage());
-        }
 
+    /**
+     * Demo loading saved classifier and using it to make predictions on data.
+     */
+    private void loadClassifierAndPredictClass(final RealMatrix dataMatrix) {
         localLogger.info("Re-loading saved classifier");
         final MachineLearningUtils.GATKClassifier loadedClassifier;
         try {
@@ -234,10 +232,11 @@ public class ExampleTrainXGBoostClassifier extends CommandLineProgram {
             throw new GATKException(err.getClass() +": " + err.getMessage());
         }
 
+        // These aren't used here, but presumably any real application would do something based on probability or label
         localLogger.info("predicting probability that data is in each class");
         final double[][] probabilities = loadedClassifier.predictProbability(dataMatrix);
 
-        return classifier;
+        localLogger.info("predicting class labels");
+        final int[] classLabels = loadedClassifier.predictClassLabels(dataMatrix);
     }
-
 }

@@ -12,7 +12,7 @@ import java.util.*;
 public class XGBoostUtilsUnitTest  extends GATKBaseTest {
     private static final String SV_UTILS_TEST_DIR = toolsTestDir + "spark/sv/utils/";
     private static final String TEST_MATRIX_DATA_FILE = SV_UTILS_TEST_DIR + "agaricus-integers.csv.gz";
-    private static final RealMatrix TEST_MATRIX = MachineLearningUtils.loadCsvFile(TEST_MATRIX_DATA_FILE);
+    private static final MachineLearningUtils.TruthSet TEST_SET = MachineLearningUtils.loadCsvFile(TEST_MATRIX_DATA_FILE);
     private static final XGBoostUtils.GATKXGBooster classifier = new XGBoostUtils.GATKXGBooster();
     private static final int NUM_TRAINING_ROUNDS = XGBoostUtils.DEFAULT_NUM_TRAINING_ROUNDS;
     private static final int NUM_EVAL_METRIC_TRAINING_ROUNDS = 100; // for tests where accurate results are not needed
@@ -40,20 +40,20 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
         // check that a classifier can be trained from data
         final Map<String, Object> classifierParams = new HashMap<>(CLASSIFIER_PARAMS);
         classifierParams.put(XGBoostUtils.NUM_TRAINING_ROUNDS_KEY, NUM_EVAL_METRIC_TRAINING_ROUNDS);
-        classifier.train(classifierParams, TEST_MATRIX);
+        classifier.train(classifierParams, TEST_SET);
 
         // check that the classifier can make predictions on the same data;
-        final int[] predictedLabels = classifier.predictClassLabels(TEST_MATRIX);
+        final int[] predictedLabels = classifier.predictClassLabels(TEST_SET.features);
 
         // check that the predictions match the data (this data is easy to predict, they should)
-        assertLabelsEqual(predictedLabels, MachineLearningUtils.getClassLabels(TEST_MATRIX),
+        assertLabelsEqual(predictedLabels, TEST_SET.classLabels,
                 "Predicted labels not identical to actual labels");
 
         // predict probabilities of whole matrix
-        final double[][] probabilities = classifier.predictProbability(TEST_MATRIX);
+        final double[][] probabilities = classifier.predictProbability(TEST_SET.features);
         // check that you get indentical results when predicting row-by-row
-        for(int row = 0; row < TEST_MATRIX.getRowDimension(); ++row) {
-            final double[] rowProbability = classifier.predictProbability(TEST_MATRIX.getRow(row));
+        for(int row = 0; row < TEST_SET.getNumRows(); ++row) {
+            final double[] rowProbability = classifier.predictProbability(TEST_SET.features.getRow(row));
             assertArrayEquals(rowProbability, probabilities[row], 0,
                     "Row " + row + ": different probabilities predicted for matrix and row-by-row");
         }
@@ -67,22 +67,22 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
                 tempFile.getAbsolutePath()
         );
         // check that you get identical results to first probability predictions
-        final double[][] loadedProbabilities = loadedClassifier.predictProbability(TEST_MATRIX);
+        final double[][] loadedProbabilities = loadedClassifier.predictProbability(TEST_SET.features);
         assertMatrixEquals(loadedProbabilities, probabilities, 0.0,
                 "Probabilities predicted by loaded classifier not equal to original");
     }
 
     @Test(groups = "sv")
     protected void testGetTrainingTrace() {
-        final int[] stratify = MachineLearningUtils.getClassLabels(TEST_MATRIX);
+        final int[] stratify = TEST_SET.classLabels;
 
         final MachineLearningUtils.TrainTestSplit hyperSplit = MachineLearningUtils.TrainTestSplit.getTrainTestSplit(
-                TUNING_FRACTION, TEST_MATRIX.getRowDimension(), random, stratify
+                TUNING_FRACTION, TEST_SET.getNumRows(), random, stratify
         );
-        final RealMatrix trainMatrix = MachineLearningUtils.sliceRows(TEST_MATRIX, hyperSplit.trainRows);
-        final RealMatrix validateMatrix = MachineLearningUtils.sliceRows(TEST_MATRIX, hyperSplit.testRows);
+        final MachineLearningUtils.TruthSet trainSet = TEST_SET.sliceRows(hyperSplit.trainRows);
+        final MachineLearningUtils.TruthSet validateSet = TEST_SET.sliceRows(hyperSplit.testRows);
 
-        final double[] trainingTrace = classifier.trainAndReturnQualityTrace(CLASSIFIER_PARAMS, trainMatrix, validateMatrix,
+        final double[] trainingTrace = classifier.trainAndReturnQualityTrace(CLASSIFIER_PARAMS, trainSet, validateSet,
                 NUM_TRAINING_ROUNDS, EARLY_STOPPING_ROUNDS);
         Assert.assertEquals(
                 trainingTrace.length, NUM_TRAINING_ROUNDS,
@@ -93,14 +93,14 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
 
     @Test(groups = "sv")
     protected void testGetMaximizeEvalMetric() {
-        final int[] stratify = MachineLearningUtils.getClassLabels(TEST_MATRIX);
+        final int[] stratify = TEST_SET.classLabels;
 
         // Just get a small subset of data, and measure what the training algorithm is trying to do on that data.
         final MachineLearningUtils.TrainTestSplit hyperSplit = MachineLearningUtils.TrainTestSplit.getTrainTestSplit(
-                TUNING_FRACTION, TEST_MATRIX.getRowDimension(), random, stratify
+                TUNING_FRACTION, TEST_SET.getNumRows(), random, stratify
         );
-        final RealMatrix trainMatrix = MachineLearningUtils.sliceRows(TEST_MATRIX, hyperSplit.trainRows);
-        final RealMatrix validateMatrix = trainMatrix;
+        final MachineLearningUtils.TruthSet trainSet = TEST_SET.sliceRows(hyperSplit.trainRows);
+        final MachineLearningUtils.TruthSet validateSet = trainSet;
 
         final XGBoostUtils.GATKXGBooster classifier = new XGBoostUtils.GATKXGBooster();
         final Map<String, Object> classifierParams = new HashMap<>(XGBoostUtils.DEFAULT_CLASSIFIER_PARAMETERS);
@@ -108,7 +108,7 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
             classifierParams.put(XGBoostUtils.EVAL_METRIC_KEY, evalMatric);
             final boolean maximizeEvalMetric = classifier.getMaximizeEvalMetric(classifierParams);
             final double[] trainingTrace = classifier.trainAndReturnQualityTrace(
-                    classifierParams, trainMatrix, validateMatrix, NUM_EVAL_METRIC_TRAINING_ROUNDS, Integer.MAX_VALUE);
+                    classifierParams, trainSet, validateSet, NUM_EVAL_METRIC_TRAINING_ROUNDS, Integer.MAX_VALUE);
             final double startVal = trainingTrace[0];
             final DoubleSummaryStatistics traceStats = Arrays.stream(trainingTrace).summaryStatistics();
             final double maxVal = traceStats.getMax();
@@ -123,34 +123,34 @@ public class XGBoostUtilsUnitTest  extends GATKBaseTest {
     @Test(groups = "sv")
     protected void testCrossvalidatedTuneAndTrain() {
         final int minCountsPerStratifyValue = (int)Math.round(NUM_CROSSVALIDATION_FOLDS / TUNING_FRACTION);
-        final int[] stratify = MachineLearningUtils.stratifyMatrixToStratifyArray(TEST_MATRIX, 10,
+        final int[] stratify = MachineLearningUtils.stratifyMatrixToStratifyArray(TEST_SET.features, 10,
                 minCountsPerStratifyValue);
 
 
         final MachineLearningUtils.TrainTestSplit hyperSplit = MachineLearningUtils.TrainTestSplit.getTrainTestSplit(
-                TUNING_FRACTION, TEST_MATRIX.getRowDimension(), random, stratify
+                TUNING_FRACTION, TEST_SET.getNumRows(), random, stratify
         );
-        final RealMatrix tuneMatrix = MachineLearningUtils.sliceRows(TEST_MATRIX, hyperSplit.trainRows);
+        final MachineLearningUtils.TruthSet tuneSet = TEST_SET.sliceRows(hyperSplit.trainRows);
         final int[] tuneStratify = MachineLearningUtils.slice(stratify, hyperSplit.trainRows);
-        final RealMatrix validateMatrix = MachineLearningUtils.sliceRows(TEST_MATRIX, hyperSplit.testRows);
+        final MachineLearningUtils.TruthSet validateSet =TEST_SET.sliceRows(hyperSplit.testRows);
         final int[] validateStratify = MachineLearningUtils.slice(stratify, hyperSplit.testRows);
 
         // set the number of threads
-        classifier.chooseNumThreads(CLASSIFIER_PARAMS, XGBoostUtils.NUM_THREADS_KEY, tuneMatrix);
+        classifier.chooseNumThreads(CLASSIFIER_PARAMS, XGBoostUtils.NUM_THREADS_KEY, tuneSet);
 
         final Map<String, Object> bestClassifierParameters = classifier.tuneClassifierParameters(
                 CLASSIFIER_PARAMS, XGBoostUtils.DEFAULT_TUNING_PARAMETERS,
                 MachineLearningUtils.ClassifierTuningStrategy.RANDOM,
-                tuneMatrix, random, tuneStratify, NUM_CROSSVALIDATION_FOLDS, NUM_TRAINING_ROUNDS,
+                tuneSet, random, tuneStratify, NUM_CROSSVALIDATION_FOLDS, NUM_TRAINING_ROUNDS,
                 EARLY_STOPPING_ROUNDS, NUM_TUNING_ROUNDS
         );
 
         final int[] predictedTestLabels = classifier.crossvalidatePredict(
-                validateMatrix, bestClassifierParameters, random, validateStratify, NUM_CROSSVALIDATION_FOLDS
+                validateSet, bestClassifierParameters, random, validateStratify, NUM_CROSSVALIDATION_FOLDS
         );
 
         final double accuracy = MachineLearningUtils.getPredictionAccuracy(
-                predictedTestLabels, MachineLearningUtils.getClassLabels(validateMatrix)
+                predictedTestLabels, validateSet.classLabels
         );
 
         Assert.assertTrue(accuracy >= MINIMUM_ALLOWED_CROSSVALIDATED_ACCURACY,

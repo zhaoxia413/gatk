@@ -12,7 +12,7 @@ import java.util.stream.Collectors;
 public class MachineLearningUtilsUnitTest extends GATKBaseTest {
     private static final Random random = new Random();
     // arbitrary number to test some of the array-building / manipulating routines that should not expected to be
-    // brittle to differences between positive numbers. Choosing a large one to verify that it scales to reasonable size
+    // brittle to differences between positive numbers. Choosing a large one to verify that it scales to reasonable getNumRows
     // data sets.
     private static final int NUM_ELEMENTS_TEST = 1001001;
     private static final double TRAINING_FRACTION = 0.3;
@@ -109,12 +109,12 @@ public class MachineLearningUtilsUnitTest extends GATKBaseTest {
         );
         try {
             MachineLearningUtils.sliceAssign(permutation, sliceArr1, sliceArr2);
-            Assert.fail("sliceAssign should throw IllegalArgumentException when slice indices don't have same size as slice values");
+            Assert.fail("sliceAssign should throw IllegalArgumentException when slice indices don't have same getNumRows as slice values");
         } catch (IllegalArgumentException ignored) {
         }
         try {
             MachineLearningUtils.sliceAssign(permutation, sliceArr2, sliceArr1);
-            Assert.fail("sliceAssign should throw IllegalArgumentException when slice indices don't have same size as slice values");
+            Assert.fail("sliceAssign should throw IllegalArgumentException when slice indices don't have same getNumRows as slice values");
         } catch (IllegalArgumentException ignored) {
         }
         // sliceAssign should throw IndexOutOfBoundsException when asked for a bad index

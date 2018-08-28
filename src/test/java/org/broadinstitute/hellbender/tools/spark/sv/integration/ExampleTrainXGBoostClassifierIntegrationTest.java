@@ -1,7 +1,7 @@
 package org.broadinstitute.hellbender.tools.spark.sv.integration;
 
-import org.apache.commons.math3.linear.RealMatrix;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
+import org.broadinstitute.hellbender.tools.spark.sv.utils.ExampleTrainXGBoostClassifier;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.MachineLearningUtils;
 import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
 import org.broadinstitute.hellbender.utils.test.BaseTest;
@@ -13,22 +13,22 @@ import java.io.IOException;
 import java.util.Arrays;
 
 public class ExampleTrainXGBoostClassifierIntegrationTest extends CommandLineProgramTest {
-    private static final String TOOL_NAME = "ExampleTrainXGBoostClassifier";
+    // TOOL_NAME = ExampleTrainXGBoostClassifier", but this allows IntelliJ to find usages
+    private static final String TOOL_NAME = ExampleTrainXGBoostClassifier.class.getSimpleName();
     private static final String SV_UTILS_DIR = publicTestDir + "org/broadinstitute/hellbender/tools/spark/sv/utils/";
     private static final String INPUT_FILE_PATH = SV_UTILS_DIR + "agaricus-integers.csv.gz";
-    private static final RealMatrix DATA_MATRIX = MachineLearningUtils.loadCsvFile(INPUT_FILE_PATH);
-    private static final int[] classLabels = MachineLearningUtils.getClassLabels(DATA_MATRIX);
+    private static final MachineLearningUtils.TruthSet TRUTH_SET = MachineLearningUtils.loadCsvFile(INPUT_FILE_PATH);
 
     @Test(groups = "sv")
     protected void testTrainAndSaveClassifier() throws IOException {
         // require perfect accuracy of final classifier (this is easy, it's trained on whole data set)
         final File outputFile = runTool(INPUT_FILE_PATH);
         final MachineLearningUtils.GATKClassifier classifier = MachineLearningUtils.GATKClassifier.load(outputFile.getAbsolutePath());
-        final int[] predictedLabels = classifier.predictClassLabels(DATA_MATRIX);
-        assertArrayEquals(predictedLabels, classLabels, "predicted class labels should exactly match actual labels.")
+        final int[] predictedLabels = classifier.predictClassLabels(TRUTH_SET.features);
+        assertArrayEquals(predictedLabels, TRUTH_SET.classLabels, "predicted class labels should exactly match actual labels.");
     }
 
-    private File runTool(final String inputPath) throws IOException {
+    private File runTool(final String inputPath) {
         final File outputFile = BaseTest.createTempFile("sv_xgboost_example_model", ".bin");
         outputFile.deleteOnExit();
 
