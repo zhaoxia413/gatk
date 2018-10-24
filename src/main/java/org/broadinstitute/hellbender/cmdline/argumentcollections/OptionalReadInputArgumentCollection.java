@@ -2,9 +2,8 @@ package org.broadinstitute.hellbender.cmdline.argumentcollections;
 
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.utils.io.IOUtils;
+import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
 
-import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,28 +20,29 @@ public final class OptionalReadInputArgumentCollection extends ReadInputArgument
             doc = "BAM/SAM/CRAM file containing reads",
             optional = true,
             common = true)
-    private List<String> readFilesNames = new ArrayList<>();
-
-    @Override
-    public List<File> getReadFiles() {
-        ArrayList<File> ret = new ArrayList<>();
-        for (String fn : readFilesNames) {
-            ret.add(new File(fn));
-        }
-        return ret;
-    }
+    private List<GATKPathSpecifier> readInputNames = new ArrayList<>();
 
     @Override
     public List<Path> getReadPaths() {
         ArrayList<Path> ret = new ArrayList<>();
-        for (String fn : readFilesNames) {
-            ret.add(IOUtils.getPath(fn));
+        for (GATKPathSpecifier fn : readInputNames) {
+            ret.add(fn.toPath());
         }
         return ret;
     }
 
+    /**
+     * Temporary staging method for backward compatibility with all of the existing call sites that
+     * expect a raw file name with no protocol scheme."
+     */
+    // TODO: When all of he call sites have been updated make this go away....
     @Override
-    public List<String> getReadFilesNames() {
-        return new ArrayList<>(readFilesNames);
+    public List<String> getRawInputStrings() {
+        ArrayList<String> ret = new ArrayList<>();
+        for (GATKPathSpecifier fn : readInputNames) {
+            ret.add(fn.getRawInputString());
+        }
+        return ret;
     }
+
 }

@@ -59,14 +59,13 @@ public abstract class ReadInputArgumentCollection implements Serializable {
     }
 
     /**
-     * Get the list of BAM/SAM/CRAM files specified at the command line
+     * Get the list of BAM/SAM/CRAM filenames as specified at the command line
+     *
+     * This is temporary staging method for backward compatibility with all of the existing call sites that
+     * expect a raw file name with no protocol scheme."
      */
-    public abstract List<File> getReadFiles();
-
-    /**
-     * Get the list of BAM/SAM/CRAM filenames specified at the command line
-     */
-    public abstract List<String> getReadFilesNames();
+    // TODO: When all of he call sites have been updated make this go away....
+    public abstract List<String> getRawInputStrings();
 
     /**
      * Get the read validation stringency specified at the command line, or the default value if none was specified

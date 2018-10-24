@@ -2,9 +2,8 @@ package org.broadinstitute.hellbender.cmdline.argumentcollections;
 
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.utils.io.IOUtils;
+import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
 
-import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,13 +15,18 @@ import java.util.List;
 public final class RequiredReadInputArgumentCollection extends ReadInputArgumentCollection {
     private static final long serialVersionUID = 1L;
     @Argument(fullName = StandardArgumentDefinitions.INPUT_LONG_NAME, shortName = StandardArgumentDefinitions.INPUT_SHORT_NAME, doc = "BAM/SAM/CRAM file containing reads", optional = false, common = true)
-    public List<String> readFilesNames;
+    public List<GATKPathSpecifier> readFilesNames;
 
+    /**
+     * Temporary staging method for backward compatibility with all of the existing call sites that
+     * expect a raw file name with no protocol scheme."
+     */
+    // TODO: When all of he call sites have been updated make this go away....
     @Override
-    public List<File> getReadFiles() {
-        ArrayList<File> ret = new ArrayList<>();
-        for (String fn : readFilesNames) {
-            ret.add(new File(fn));
+    public List<String> getRawInputStrings() {
+        ArrayList<String> ret = new ArrayList<>();
+        for (GATKPathSpecifier fn : readFilesNames) {
+            ret.add(fn.getRawInputString());
         }
         return ret;
     }
@@ -30,14 +34,10 @@ public final class RequiredReadInputArgumentCollection extends ReadInputArgument
     @Override
     public List<Path> getReadPaths() {
         ArrayList<Path> ret = new ArrayList<>();
-        for (String fn : readFilesNames) {
-            ret.add(IOUtils.getPath(fn));
+        for (GATKPathSpecifier fn : readFilesNames) {
+            ret.add(fn.toPath());
         }
         return ret;
     }
 
-    @Override
-    public List<String> getReadFilesNames() {
-        return new ArrayList<>(readFilesNames);
-    }
 }

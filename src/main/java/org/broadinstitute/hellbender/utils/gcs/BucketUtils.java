@@ -19,6 +19,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
@@ -27,6 +28,8 @@ import shaded.cloud_nio.com.google.auth.oauth2.GoogleCredentials;
 import shaded.cloud_nio.org.threeten.bp.Duration;
 
 import java.io.*;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.UUID;
@@ -113,7 +116,13 @@ public final class BucketUtils {
                 FileSystem fs = file.getFileSystem(new Configuration());
                 inputStream = fs.open(file);
             } else {
-                 inputStream = new FileInputStream(path);
+                try {
+                    //TODO: fix caller
+                    final URI refURI = new URI(path);
+                    inputStream = new FileInputStream(refURI.getPath());
+                } catch (URISyntaxException e) {
+                    throw new GATKException("", e);
+                }
             }
 
             if(IOUtil.hasBlockCompressedExtension(path)){

@@ -30,6 +30,20 @@ import java.util.Map;
 public class GenomicsDBUtils {
 
     /**
+     * identifies a path as a GenomicsDB URI
+     */
+    public static final String GENOMIC_DB_URI_SCHEME = "gendb://";
+
+    /**
+     * @param path String containing the path to test
+     * @return true if path represent a GenomicsDB URI, otherwise false
+     */
+    //TODO change this to take a URI (or change callers to delegate to GatkUri)
+    public static boolean isGenomicsDBPath(final String path) {
+        return path != null && path.startsWith(GENOMIC_DB_URI_SCHEME);
+    }
+
+    /**
      *
      * @param reference reference sequence
      * @param workspace path to the GenomicsDB workspace

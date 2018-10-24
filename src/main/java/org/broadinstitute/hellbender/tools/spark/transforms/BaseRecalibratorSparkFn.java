@@ -26,6 +26,7 @@ public final class BaseRecalibratorSparkFn {
      */
     public static RecalibrationReport apply(final JavaPairRDD<GATKRead, Iterable<GATKVariant>> readsWithVariants, final SAMFileHeader header, final String referenceFileName, final RecalibrationArgumentCollection recalArgs) {
         JavaRDD<RecalibrationTables> unmergedTables = readsWithVariants.mapPartitions(readsWithVariantsIterator -> {
+            // TODO: what form should referenceFile arg take ? see SparkContext#addFile()
             String pathOnExecutor = SparkFiles.get(referenceFileName);
             ReferenceDataSource referenceDataSource = new ReferenceFileSource(IOUtils.getPath(pathOnExecutor));
             final BaseRecalibrationEngine bqsr = new BaseRecalibrationEngine(recalArgs, header);

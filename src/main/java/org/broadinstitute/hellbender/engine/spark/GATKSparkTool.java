@@ -401,7 +401,7 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * Helper method that simply returns a boolean regarding whether the input has CRAM files or not.
      */
     private boolean hasCramInput() {
-        return readArguments.getReadFiles().stream().anyMatch(IOUtils::isCramFile);
+        return readArguments.getReadPaths().stream().anyMatch(IOUtils::isCramFile);
     }
 
     /**
@@ -543,17 +543,17 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * Does nothing if no reads inputs are present.
      */
     private void initializeReads(final JavaSparkContext sparkContext) {
-        if ( readArguments.getReadFilesNames().isEmpty() ) {
+        if ( readArguments.getReadPaths().isEmpty() ) {
             return;
         }
 
-        if (getReadInputMergingPolicy() == ReadInputMergingPolicy.doNotMerge && readArguments.getReadFilesNames().size() != 1 ) {
+        if (getReadInputMergingPolicy() == ReadInputMergingPolicy.doNotMerge && readArguments.getReadPaths().size() != 1 ) {
             throw new UserException("Sorry, we only support a single reads input for for this spark tool.");
         }
 
         readInputs = new LinkedHashMap<>();
         readsSource = new ReadsSparkSource(sparkContext, readArguments.getReadValidationStringency());
-        for (String input : readArguments.getReadFilesNames()) {
+        for (String input : readArguments.getRawInputStrings()) {
             readInputs.put(input, readsSource.getHeader(
                     input, hasReference() ?  referenceArguments.getReferenceFileName() : null));
         }

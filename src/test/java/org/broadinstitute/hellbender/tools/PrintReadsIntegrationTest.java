@@ -122,7 +122,10 @@ public final class PrintReadsIntegrationTest extends CommandLineProgramTest{
                 //using gatk4 PrintReads/htsjdk.2.1.0, which includes changes to support
                 //multireference containers
                 {"print_reads.sorted.queryname.htsjdk-2.1.0.cram", ".cram", "print_reads.fasta"},
-                {"print_reads.sorted.queryname.htsjdk-2.1.0.cram", ".sam", "print_reads.fasta"}
+                {"print_reads.sorted.queryname.htsjdk-2.1.0.cram", ".sam", "print_reads.fasta"},
+
+                // test a file in a directory that contains a URI fragment delimiter in the name
+                {"testDirWith#InName/print_reads.sam", ".sam", null},
         };
     }
 

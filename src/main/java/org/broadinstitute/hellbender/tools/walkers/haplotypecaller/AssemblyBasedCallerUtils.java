@@ -35,6 +35,7 @@ import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAligner;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -173,9 +174,9 @@ public final class AssemblyBasedCallerUtils {
         return new SimpleInterval(region.getExtendedSpan().getContig(), padLeft, padRight);
     }
 
-    public static CachingIndexedFastaSequenceFile createReferenceReader(final String reference) {
+    public static CachingIndexedFastaSequenceFile createReferenceReader(final Path referencePath) {
         // fasta reference reader to supplement the edges of the reference sequence
-        return new CachingIndexedFastaSequenceFile(IOUtils.getPath(reference));
+        return new CachingIndexedFastaSequenceFile(referencePath);
     }
 
     /**

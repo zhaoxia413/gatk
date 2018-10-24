@@ -270,7 +270,7 @@ public class RevertSamSpark extends GATKSparkTool {
         ////////////////////////////////////////////////////////////////////////////
         Map<String, Path> writerMap = getOutputMap(outputMap,
                                                   output,
-                                                  getDefaultExtension(readArguments.getReadFiles().get(0).toString(), outputByReadgroupFileFormat),
+                                                  getDefaultExtension(readArguments.getReadPaths().get(0).toString(), outputByReadgroupFileFormat),
                                                   localHeader.getReadGroups(),
                                                   outputByReadGroup);
 
