@@ -61,7 +61,7 @@ public final class TandemRepeat extends InfoFieldAnnotation implements StandardM
                 GATKVCFConstants.REPEATS_PER_ALLELE_KEY);
     }
 
-    private static byte[] getRefBasesStartingAtVariantLocus(final ReferenceContext ref, final VariantContext vc) {
+    public static byte[] getRefBasesStartingAtVariantLocus(final ReferenceContext ref, final VariantContext vc) {
         final byte[] bases = ref.getBases();
         final int startIndex = vc.getStart() - ref.getWindow().getStart();
         return new String(bases).substring(startIndex).getBytes();

@@ -921,6 +921,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
 
         // A*,ATC, context = ATC ATC ATC : (ATC)3 -> (ATC)4
         VariantContext vc = new VariantContextBuilder("foo", insLoc, insLocStart, insLocStop, Arrays.asList(nullR,atc)).make();
+
         result = GATKVariantContextUtils.getNumTandemRepeatUnits(vc, refBytes);
         Assert.assertEquals(result.getLeft().toArray()[0],3);
         Assert.assertEquals(result.getLeft().toArray()[1],4);
