@@ -1,4 +1,4 @@
-import "AlignmentPipeline.wdl" as AlignAndMarkDuplicates
+import "../AlignmentPipeline.wdl" as AlignAndMarkDuplicates
 
 workflow AlignAndCall {
   meta {
