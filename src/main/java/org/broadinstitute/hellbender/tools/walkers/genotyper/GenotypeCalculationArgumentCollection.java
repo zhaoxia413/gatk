@@ -22,6 +22,8 @@ public final class GenotypeCalculationArgumentCollection implements Serializable
     public static final double DEFAULT_STANDARD_CONFIDENCE_FOR_CALLING = 30.0;
     public static final int DEFAULT_MAX_ALTERNATE_ALLELES = 6;
 
+    public static final double DEFAULT_STANDARD_CONFIDENCE_FOR_CALLING = 30.0;
+
     /**
      * Creates a GenotypeCalculationArgumentCollection with default values.
      */
