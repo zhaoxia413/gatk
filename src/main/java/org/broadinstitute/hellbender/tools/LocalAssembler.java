@@ -48,11 +48,21 @@ public class LocalAssembler extends MultiplePassReadWalker {
         final Map<Contig, String> contigNames = nameContigs(contigs);
 
         final List<Error> errors = new ArrayList<>();
-        final KmerSet<KmerAdjacency> discoveredKmerSet = new KmerSet<>(1000);
+        final Map<GapFill, Integer> gapFillCountMap = new HashMap<>();
         forEachRead( (read, ref, feature, nReadsProcessed) -> {
             final int nErrorsToStart = errors.size();
-            final Path path = new Path(read.getBasesNoCopy(), read.getBaseQualitiesNoCopy(),
-                    kmerAdjacencySet, discoveredKmerSet, errors);
+            final Path path = new Path(read.getBasesNoCopy(), read.getBaseQualitiesNoCopy(), kmerAdjacencySet, errors);
+            final List<PathPart> parts = path.getParts();
+            final int nParts = parts.size();
+            for ( int idx = 1; idx < nParts - 1; ++idx ) {
+                final PathPart gap = parts.get(idx);
+                if ( gap.getContig() == null ) {
+                    final Contig start = parts.get(idx-1).getContig();
+                    final Contig end = parts.get(idx+1).getContig();
+                    gapFillCountMap.merge(new GapFill(start, end, gap.getStop()), 1, Integer::sum);
+                    gapFillCountMap.merge(new GapFill(end.rc(), start.rc(), gap.getStop()), 1, Integer::sum);
+                }
+            }
             final int nErrors = errors.size() - nErrorsToStart;
             final String readIdx = (nReadsProcessed + 1) + ": ";
             final String pathDesc = path.toString(contigNames);
@@ -63,16 +73,16 @@ public class LocalAssembler extends MultiplePassReadWalker {
             }
         });
 
-        final List<ContigImpl> gapFills = buildContigs(discoveredKmerSet);
-        connectContigs(gapFills);
-        removeThinContigs(gapFills, discoveredKmerSet);
-        weldPipes(gapFills);
-        System.out.println("Gap Fill contigs:");
-        writeContigs(gapFills, nameContigs(gapFills));
+        for ( final Map.Entry<GapFill, Integer> entry : gapFillCountMap.entrySet() ) {
+            final GapFill gapFill = entry.getKey();
+            final int count = entry.getValue();
+            System.out.println("Gap fill: " + contigNames.get(gapFill.getStart()) +
+                    "--" + gapFill.getDistance() + "-->" + contigNames.get(gapFill.getEnd()) +
+                    " observed " + count + " times");
+        }
 
         markComponents(contigs);
         dumpDOT(contigs, contigNames, "assembly.dot");
-        System.out.println("Graph contigs:");
         writeContigs(contigs, contigNames);
     }
 
@@ -1299,6 +1309,34 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public byte getQuality() { return quality; }
     }
 
+    public static final class GapFill {
+        private final Contig start;
+        private final Contig end;
+        private final int distance;
+
+        public GapFill( final Contig start, final Contig end, final int distance ) {
+            this.start = start;
+            this.end = end;
+            this.distance = distance;
+        }
+
+        public Contig getStart() { return start; }
+        public Contig getEnd() { return end; }
+        public int getDistance() { return distance; }
+
+        @Override public int hashCode() {
+            return 47 * (47 * (47 * start.hashCode() + end.hashCode()) + distance);
+        }
+
+        @Override public boolean equals( final Object obj ) {
+            return obj instanceof GapFill && equals((GapFill)obj);
+        }
+
+        public boolean equals( final GapFill that ) {
+            return this.start == that.start && this.end == that.end && this.distance == that.distance;
+        }
+    }
+
     public static final class Path {
         private final List<PathPart> parts;
 
@@ -1314,13 +1352,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public Path( final byte[] calls,
                      final byte[] quals,
                      final KmerSet<KmerAdjacency> kmerAdjacencySet,
-                     final KmerSet<KmerAdjacency> discoveredKmerSet,
                      final List<Error> errors ) {
             parts = new ArrayList<>();
             long kVal = 0;
             int count = 0;
             PathPart currentPathPart = null;
-            List<Long> discoveredKVals = null;
             for ( int idx = 0; idx != calls.length; ++idx ) {
                 final byte call = calls[idx];
                 kVal <<= 2;
@@ -1344,9 +1380,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
                         } else if ( (contig = currentPathPart.getContig()) == null ) {
                             // if the current path part is NoKmer, just extend it
                             currentPathPart.extendPath();
-                            if ( discoveredKVals != null ) {
-                                discoveredKVals.add(kVal);
-                            }
                         } else if ( (contigOffset = currentPathPart.getStop() + KSIZE -1) < contig.size() ) {
                             // if the current path part is on some contig, note the mismatch and extend it
                             errors.add(new Error(contig, contigOffset, call, quals[idx]));
@@ -1375,13 +1408,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
                             // current path part is at the end of its contig -- create a new NoKmer path part
                             currentPathPart = new PathPart();
                             parts.add(currentPathPart);
-                            if ( contig.getSuccessors().size() == 0 ) {
-                                discoveredKVals = new ArrayList<>();
-                                discoveredKVals.add(kVal);
-                            }
                         }
                     } else {
-                        discoveredKVals = null;
+                        // we've found our kmer
                         if ( currentPathPart == null ) {
                             // we've looked up a kmer, but don't have a current path part -- create one
                             currentPathPart = new PathPart(contig, kmer.getContigOffset());
@@ -1399,11 +1428,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
                             // we're jumping to a new contig.  start a new path part
                             currentPathPart = new PathPart(contig, kmer.getContigOffset());
                             parts.add(currentPathPart);
-//                        } else if ( kmer.getContigOffset() == 0 ) {
+                        } else if ( kmer.getContigOffset() == 0 ) {
                             // we got our 1st good kmer lookup at the start of a contig after a chunk of NoKmers
                             // just add a new path part for it
-//                            currentPathPart = new PathPart(contig, 0);
-//                            parts.add(currentPathPart);
+                            currentPathPart = new PathPart(contig, 0);
+                            parts.add(currentPathPart);
                         } else {
                             // we got our 1st good kmer lookup after a chunk of NoKmers, and we're not at the very start
                             // of the contig, so there's an upstream error to fix.
@@ -1416,33 +1445,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
                             SequenceUtil.reverseComplement(rcCalls);
                             final byte[] rQuals = Arrays.copyOfRange(quals, start, end);
                             SequenceUtil.reverseQualities(rQuals);
-                            final Path rcPath = new Path(rcCalls, rQuals, kmerAdjacencySet, discoveredKmerSet, errors).rc();
+                            final Path rcPath = new Path(rcCalls, rQuals, kmerAdjacencySet, errors).rc();
                             parts.addAll(rcPath.getParts());
                             currentPathPart = parts.get(parts.size() - 1);
                         }
                     }
                 }
-            }
-
-            if ( discoveredKVals != null ) {
-                final Iterator<Long> itr = discoveredKVals.iterator();
-                KmerAdjacency lastKmer = null;
-                KmerAdjacency currentKmer = KmerAdjacency.findOrAdd(itr.next(), discoveredKmerSet);
-                while ( itr.hasNext() ) {
-                    final KmerAdjacency nextKmer = KmerAdjacency.findOrAdd(itr.next(), discoveredKmerSet);
-                    currentKmer.observe(lastKmer, nextKmer);
-                    lastKmer = currentKmer;
-                    currentKmer = nextKmer;
-                }
-                currentKmer.observe(lastKmer, null);
-                discoveredKmerSet.add(currentKmer);
-/*
-                final StringBuilder sb = new StringBuilder(discoveredKVals.size());
-                for ( final long kkk : discoveredKVals ) {
-                    sb.append("ACGT".charAt((int)(kkk & 3)));
-                }
-                System.out.println(sb);
-*/
             }
         }
 
