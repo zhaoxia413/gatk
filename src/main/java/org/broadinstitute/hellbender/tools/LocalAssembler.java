@@ -26,8 +26,6 @@ import java.util.function.LongFunction;
 )
 @BetaFeature
 public class LocalAssembler extends MultiplePassReadWalker {
-    public static final int KSIZE = 31;
-    public static final long KMASK = (1L << 2*KSIZE) - 1L;
     public static final byte QMIN = 24;
 
     @Override public List<ReadFilter> getDefaultReadFilters() {
@@ -39,7 +37,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         forEachRead( (read, ref, feature, nReadsProcessed) -> {
             final byte[] calls = read.getBasesNoCopy();
             final byte[] quals = read.getBaseQualitiesNoCopy();
-            KmerAdjacency.kmerize(calls, quals, QMIN, kmerAdjacencySet); });
+            KmerAdjacencyImpl.kmerize(calls, quals, QMIN, kmerAdjacencySet); });
 
         final List<ContigImpl> contigs = buildContigs(kmerAdjacencySet);
         connectContigs(contigs);
@@ -84,12 +82,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
             final Contig end = gapFill.getEnd();
             System.out.println("Gap fill: " + contigNames.get(start) + "--" + gapSize + "-->" + contigNames.get(end) +
                     " observed " + count + " times");
-            if ( count >= 3 && gapSize <= KSIZE/2 ) {
+            if ( count >= 3 && gapSize <= Kmer.KSIZE/2 ) {
                 final CharSequence seq1 = start.getSequence();
                 final int seq1Size = seq1.length();
                 final CharSequence seq2 = end.getSequence();
-                final int seq2Start = KSIZE - gapSize - 1;
-                final String sequence = seq1.subSequence(seq1Size - KSIZE + 1, seq1Size).toString() +
+                final int seq2Start = Kmer.KSIZE - gapSize - 1;
+                final String sequence = seq1.subSequence(seq1Size - Kmer.KSIZE + 1, seq1Size).toString() +
                         seq2.subSequence(seq2Start, seq2Start + gapSize + 1);
                 final ContigImpl gapTig = new ContigImpl(sequence, count, start, end);
                 contigs.add(gapTig);
@@ -201,7 +199,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         contigs.removeIf(contig -> {
             if ( contig.getMaxObservations() <= 2 ) {
                 final KmerAdjacency firstKmer = contig.getFirstKmer();
-                firstKmer.clearPredecessorMask();
+                firstKmer.removeAllPredecessors();
                 final int firstKmerFinalCall = firstKmer.getFinalCall();
                 for ( final Contig predecessor : contig.getPredecessors() ) {
                     predecessor.getLastKmer().removeSuccessor(firstKmerFinalCall, kmerAdjacencySet);
@@ -211,7 +209,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 }
 
                 final KmerAdjacency lastKmer = contig.getLastKmer();
-                lastKmer.clearSuccessorMask();
+                lastKmer.removeAllSuccessors();
                 final int lastKmerInitialCall = lastKmer.getInitialCall();
                 for ( final Contig successor : contig.getSuccessors() ) {
                     successor.getFirstKmer().removePredecessor(lastKmerInitialCall, kmerAdjacencySet);
@@ -536,6 +534,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     public static class Kmer {
+        public static final int KSIZE = 31;
+        public static final long KMASK = (1L << 2*KSIZE) - 1L;
         private final long kVal;
 
         public Kmer( final long kVal ) { this.kVal = kVal; }
@@ -544,6 +544,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public boolean isCanonical() { return isCanonical(kVal); }
         public int getInitialCall() { return (int)(kVal >> (KSIZE*2 - 2)) & 3; }
         public int getFinalCall() { return (int)kVal & 3; }
+
+        public long getPredecessorVal( final int call ) { return (kVal >> 2) | ((long)call << (2 * (KSIZE - 1))); }
+        public long getSuccessorVal( final int call ) { return ((kVal << 2) & KMASK) | call; }
 
         public static boolean isCanonical( final long val ) {
             return (val & (1L << KSIZE)) == 0L;
@@ -882,133 +885,29 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    public static final class KmerAdjacency extends Kmer {
-        private KmerAdjacency solePredecessor = null; // set to null if there are no predecessors, or multiple predecessors
-        private KmerAdjacency soleSuccessor = null; // set to null if there are no successors, or multiple successors
-        private int predecessorMask = 0; // bit mask of observed kmers preceding this one
-        private int successorMask = 0; // bit mask observed kmers following this one
-        private Contig contig = null; // the contig that contains this Kmer
-        private int contigOffset;
-        private int nObservations = 0; // the reads in which this kmer was observed
-        private final KmerAdjacency rc; // the reverse-complement of this kmer
-        private static final int[] COUNT_FOR_MASK =
-                //side sum for binary values from 0 -> 15
-                //0000  0001 0010 0011 0100 0101 0110 0111 1000 1001 1010 1011 1100 1101 1110 1111
-                {    0,    1,   1,   2,   1,   2,   2,   3,   1,   2,   2,   3,   2,   3,   3,   4 };
+    public static abstract class KmerAdjacency extends Kmer {
+        public KmerAdjacency( long kVal ) { super(kVal); }
 
-        public KmerAdjacency( final long kVal ) {
-            super(kVal);
-            this.rc = new KmerAdjacency(this);
-        }
+        public abstract KmerAdjacency getSolePredecessor();
+        public abstract int getPredecessorMask();
+        public abstract int getPredecessorCount();
+        public abstract void removeAllPredecessors();
+        public abstract void removePredecessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet );
 
-        // constructor for reverse-complement of existing KmerAdjacency
-        private KmerAdjacency( final KmerAdjacency rc ) {
-            super(reverseComplement(rc.getKVal()));
-            this.rc = rc;
-        }
+        public abstract KmerAdjacency getSoleSuccessor();
+        public abstract int getSuccessorMask();
+        public abstract int getSuccessorCount();
+        public abstract void removeAllSuccessors();
+        public abstract void removeSuccessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet );
 
-        public KmerAdjacency toCanonical() { return isCanonical() ? this : rc; }
+        public abstract Contig getContig();
+        public abstract int getContigOffset();
+        public abstract void setContig( final Contig contig, final int contigOffset );
 
-        public KmerAdjacency getSolePredecessor() { return solePredecessor; } // may return null
-        public int getPredecessorMask() { return predecessorMask; }
-        public void removePredecessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-            predecessorMask &= ~(1 << callToRemove);
-            rc.successorMask &= ~(1 << (3 - callToRemove));
-            solePredecessor = null;
-            rc.soleSuccessor = null;
-            if ( getPredecessorCount() == 1 ) {
-                for ( int call = 0; call != 4; ++call ) {
-                    if ( ((1 << call) & predecessorMask) != 0 ) {
-                        solePredecessor = find(getPredecessorVal(call), kmerAdjacencySet);
-                        rc.soleSuccessor = solePredecessor.rc();
-                        break;
-                    }
-                }
-            }
-        }
-        public void clearPredecessorMask() { predecessorMask = 0; solePredecessor = null; }
-        public int getPredecessorCount() { return COUNT_FOR_MASK[predecessorMask]; }
-        public long getPredecessorVal( final int call ) { return (getKVal() >> 2) | ((long)call << (2 * (KSIZE - 1))); }
+        public abstract int getNObservations();
+        public abstract KmerAdjacency rc();
 
-        public KmerAdjacency getSoleSuccessor() { return soleSuccessor; } // may return null
-        public int getSuccessorMask() { return successorMask; }
-        public void removeSuccessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-            successorMask &= ~(1 << callToRemove);
-            rc.predecessorMask &= ~(1 << (3 - callToRemove));
-            soleSuccessor = null;
-            rc.solePredecessor = null;
-            if ( getSuccessorCount() == 1 ) {
-                for ( int call = 0; call != 4; ++call ) {
-                    if ( ((1 << call) & successorMask) != 0 ) {
-                        soleSuccessor = find(getSuccessorVal(call), kmerAdjacencySet);
-                        rc.solePredecessor = soleSuccessor.rc();
-                        break;
-                    }
-                }
-            }
-        }
-        public void clearSuccessorMask() { successorMask = 0; soleSuccessor = null; }
-        public int getSuccessorCount() { return COUNT_FOR_MASK[successorMask]; }
-        public long getSuccessorVal( final int call ) { return ((getKVal() << 2) & KMASK) | call; }
-
-        public Contig getContig() { return contig; }
-        public int getContigOffset() { return contigOffset; }
-        public int getNObservations() { return nObservations; }
-        public KmerAdjacency rc() { return rc; }
-
-        public void observe( final KmerAdjacency predecessor, final KmerAdjacency successor ) {
-            if ( predecessor != null ) {
-                final int initialCall = predecessor.getInitialCall();
-                final int newPredecessorMask = 1 << initialCall;
-                if ( (newPredecessorMask & predecessorMask) == 0 ) {
-                    final int rcPredecessorMask = 1 << (3 - initialCall);
-                    if ( predecessorMask != 0 ) {
-                        solePredecessor = null;
-                        predecessorMask |= newPredecessorMask;
-                        rc.soleSuccessor = null;
-                        rc.successorMask |= rcPredecessorMask;
-                    } else {
-                        solePredecessor = predecessor;
-                        rc.soleSuccessor = predecessor.rc();
-                        predecessorMask = newPredecessorMask;
-                        rc.successorMask = rcPredecessorMask;
-                    }
-                }
-            }
-            if ( successor != null ) {
-                final int finalCall = successor.getFinalCall();
-                final int newSuccessorMask = 1 << finalCall;
-                if ( (newSuccessorMask & successorMask) == 0 ) {
-                    final int rcSuccessorMask = 1 << (3 - finalCall);
-                    if ( successorMask != 0 ) {
-                        soleSuccessor = null;
-                        successorMask |= newSuccessorMask;
-                        rc.solePredecessor = null;
-                        rc.predecessorMask |= rcSuccessorMask;
-                    } else {
-                        soleSuccessor = successor;
-                        rc.solePredecessor = successor.rc();
-                        successorMask = newSuccessorMask;
-                        rc.predecessorMask = rcSuccessorMask;
-                    }
-                }
-            }
-            nObservations += 1;
-            rc.nObservations += 1;
-        }
-
-        public void setContig( final Contig contig, final int contigOffset ) {
-            this.contig = contig;
-            this.contigOffset = contigOffset;
-            if ( contig == null ) {
-                rc.contig = null;
-                rc.contigOffset = 0;
-            } else {
-                rc.contig = contig.rc();
-                rc.contigOffset = contig.size() - KSIZE - contigOffset;
-            }
-            rc.contig = contig == null ? null : contig.rc();
-        }
+        public abstract void observe( final KmerAdjacency predecessor, final KmerAdjacency successor );
 
         @Override public String toString() {
             final StringBuilder sb = new StringBuilder(KSIZE);
@@ -1019,6 +918,194 @@ public class LocalAssembler extends MultiplePassReadWalker {
             }
             sb.reverse();
             return sb.toString();
+        }
+
+        // Lookup table for reverse-complementing each possible byte value.
+        // Each pair of bits represents a base, so you have to reverse bits pairwise and then invert all bits.
+        // This is most quickly and easily done with a lookup table.
+        private static final long[] BYTEWISE_REVERSE_COMPLEMENT;
+        static {
+            BYTEWISE_REVERSE_COMPLEMENT = new long[256];
+            for ( int bIn = 0; bIn != 256; ++bIn ) {
+                BYTEWISE_REVERSE_COMPLEMENT[bIn] =
+                        ~(((bIn & 3) << 6) | (((bIn >> 2) & 3) << 4) | (((bIn >> 4) & 3) << 2) | ((bIn >> 6) & 3)) & 0xffL;
+            }
+        }
+
+        public static long reverseComplement( long val ) {
+            // process val one byte at a time
+            long result = BYTEWISE_REVERSE_COMPLEMENT[(int)val & 0xFF]; // handle the low-order byte
+            int nBytes = 8;
+            while ( --nBytes != 0 ) { // pre-decrementing:  we'll go through the loop 7 times
+                // rotate down by a byte
+                val >>= 8;
+                // rotate up by a byte and OR in the reverse complement of the next byte
+                result = (result << 8) | BYTEWISE_REVERSE_COMPLEMENT[(int)val & 0xFF];
+            }
+            return result >>> (Long.SIZE - 2*KSIZE);
+        }
+
+        public static KmerAdjacency find( final long kVal, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+            if ( isCanonical(kVal) ) return kmerAdjacencySet.find(kVal & KMASK);
+            final KmerAdjacency result = kmerAdjacencySet.find(reverseComplement(kVal));
+            return result == null ? null : result.rc();
+        }
+
+        public static KmerAdjacency findOrAdd( final long kVal, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+            if ( isCanonical(kVal) ) return kmerAdjacencySet.findOrAdd(kVal & KMASK, KmerAdjacencyImpl::new);
+            return kmerAdjacencySet.findOrAdd(reverseComplement(kVal), KmerAdjacencyImpl::new).rc();
+        }
+    }
+
+    public static final class KmerAdjacencyRC extends KmerAdjacency {
+        private KmerAdjacencyImpl rc;
+        private static int[] NIBREV =
+        // 0000,  0001,  0010,  0011,  0100,  0101,  0110,  0111,  1000,  1001,  1010,  1011,  1100,  1101,  1110,  1111
+        {0b0000,0b1000,0b0100,0b1100,0b0010,0b1010,0b0110,0b1110,0b0001,0b1001,0b0101,0b1101,0b0011,0b1011,0b0111,0b1111};
+
+        public KmerAdjacencyRC( final KmerAdjacencyImpl rc ) {
+            super(reverseComplement(rc.getKVal()));
+            this.rc = rc;
+        }
+
+        @Override public KmerAdjacency getSolePredecessor() {
+            final KmerAdjacency successor = rc.getSoleSuccessor();
+            return successor == null ? null : successor.rc();
+        }
+        @Override public int getPredecessorMask() { return NIBREV[rc.getSuccessorMask()]; }
+        @Override public int getPredecessorCount() { return rc.getSuccessorCount(); }
+        @Override public void removeAllPredecessors() { rc.removeAllSuccessors(); }
+        @Override
+        public void removePredecessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+            rc.removeSuccessor(3 - callToRemove, kmerAdjacencySet);
+        }
+
+        @Override public KmerAdjacency getSoleSuccessor() {
+            final KmerAdjacency predecessor = rc.getSolePredecessor();
+            return predecessor == null ? null : predecessor.rc();
+        }
+        @Override public int getSuccessorMask() { return NIBREV[rc.getPredecessorMask()]; }
+        @Override public int getSuccessorCount() { return rc.getPredecessorCount(); }
+        @Override public void removeAllSuccessors() { rc.removeAllPredecessors(); }
+        @Override
+        public void removeSuccessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+            rc.removePredecessor(3 - callToRemove, kmerAdjacencySet);
+        }
+
+        @Override public Contig getContig() {
+            final Contig contig = rc.getContig();
+            return contig == null ? null : contig.rc();
+        }
+        @Override public int getContigOffset() {
+            final Contig contig = rc.getContig();
+            return contig == null ? 0 : contig.size() - rc.getContigOffset() - 1;
+        }
+        @Override public void setContig( final Contig contig, final int contigOffset ) {
+            if ( contig == null ) rc.setContig(null, 0);
+            else rc.setContig(contig.rc(), contig.size() - contigOffset - 1);
+        }
+
+        @Override public int getNObservations() { return rc.getNObservations(); }
+        @Override public KmerAdjacency rc() { return rc; }
+
+        @Override public void observe( final KmerAdjacency predecessor, final KmerAdjacency successor ) {
+            rc.observe(successor == null ? null : successor.rc(), predecessor == null ? null : predecessor.rc());
+        }
+    }
+
+    public static final class KmerAdjacencyImpl extends KmerAdjacency {
+        private KmerAdjacency solePredecessor = null; // set to null if there are no predecessors, or multiple predecessors
+        private KmerAdjacency soleSuccessor = null; // set to null if there are no successors, or multiple successors
+        private int predecessorMask = 0; // bit mask of observed kmers preceding this one
+        private int successorMask = 0; // bit mask observed kmers following this one
+        private Contig contig = null; // the contig that contains this Kmer
+        private int contigOffset;
+        private int nObservations = 0; // the reads in which this kmer was observed
+        private final KmerAdjacencyRC rc; // the reverse-complement of this kmer
+        private static final int[] COUNT_FOR_MASK =
+                //side sum for binary values from 0 -> 15
+                //0000  0001 0010 0011 0100 0101 0110 0111 1000 1001 1010 1011 1100 1101 1110 1111
+                {    0,    1,   1,   2,   1,   2,   2,   3,   1,   2,   2,   3,   2,   3,   3,   4 };
+
+        public KmerAdjacencyImpl( final long kVal ) {
+            super(kVal);
+            this.rc = new KmerAdjacencyRC(this);
+        }
+
+        @Override public KmerAdjacency getSolePredecessor() { return solePredecessor; } // may return null
+        @Override public int getPredecessorMask() { return predecessorMask; }
+        @Override public int getPredecessorCount() { return COUNT_FOR_MASK[predecessorMask]; }
+        @Override public void removeAllPredecessors() { predecessorMask = 0; solePredecessor = null; }
+        @Override
+        public void removePredecessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+            predecessorMask &= ~(1 << callToRemove);
+            solePredecessor = null;
+            if ( getPredecessorCount() == 1 ) {
+                for ( int call = 0; call != 4; ++call ) {
+                    if ( ((1 << call) & predecessorMask) != 0 ) {
+                        solePredecessor = find(getPredecessorVal(call), kmerAdjacencySet);
+                        break;
+                    }
+                }
+            }
+        }
+
+        @Override public KmerAdjacency getSoleSuccessor() { return soleSuccessor; } // may return null
+        @Override public int getSuccessorMask() { return successorMask; }
+        @Override public int getSuccessorCount() { return COUNT_FOR_MASK[successorMask]; }
+        @Override public void removeAllSuccessors() { successorMask = 0; soleSuccessor = null; }
+        @Override
+        public void removeSuccessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+            successorMask &= ~(1 << callToRemove);
+            soleSuccessor = null;
+            if ( getSuccessorCount() == 1 ) {
+                for ( int call = 0; call != 4; ++call ) {
+                    if ( ((1 << call) & successorMask) != 0 ) {
+                        soleSuccessor = find(getSuccessorVal(call), kmerAdjacencySet);
+                        break;
+                    }
+                }
+            }
+        }
+
+        @Override public Contig getContig() { return contig; }
+        @Override public int getContigOffset() { return contigOffset; }
+        @Override public void setContig( final Contig contig, final int contigOffset ) {
+            this.contig = contig;
+            this.contigOffset = contigOffset;
+        }
+
+        @Override public int getNObservations() { return nObservations; }
+        @Override public KmerAdjacency rc() { return rc; }
+
+        @Override public void observe( final KmerAdjacency predecessor, final KmerAdjacency successor ) {
+            if ( predecessor != null ) {
+                final int initialCall = predecessor.getInitialCall();
+                final int newPredecessorMask = 1 << initialCall;
+                if ( (newPredecessorMask & predecessorMask) == 0 ) {
+                    if ( predecessorMask == 0 ) {
+                        solePredecessor = predecessor;
+                        predecessorMask = newPredecessorMask;
+                    } else {
+                        solePredecessor = null;
+                        predecessorMask |= newPredecessorMask;
+                    }
+                }
+            }
+            if ( successor != null ) {
+                final int finalCall = successor.getFinalCall();
+                final int newSuccessorMask = 1 << finalCall;
+                if ( (newSuccessorMask & successorMask) == 0 ) {
+                    if ( successorMask == 0 ) {
+                        soleSuccessor = successor;
+                        successorMask = newSuccessorMask;
+                    } else {
+                        soleSuccessor = null;
+                        successorMask |= newSuccessorMask;
+                    }
+                }
+            }
+            nObservations += 1;
         }
 
         public static void kmerize( final byte[] calls,
@@ -1062,59 +1149,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
             if ( currentAdjacency != null ) {
                 currentAdjacency.observe(prevAdjacency, null);
             }
-        }
-
-        public static KmerAdjacency find( final long kVal, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-            if ( isCanonical(kVal) ) return kmerAdjacencySet.find(kVal & KMASK);
-            final KmerAdjacency result = kmerAdjacencySet.find(reverseComplement(kVal));
-            return result == null ? null : result.rc();
-        }
-
-        public static KmerAdjacency findOrAdd( final long kVal, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-            if ( isCanonical(kVal) ) return kmerAdjacencySet.findOrAdd(kVal & KMASK, KmerAdjacency::new);
-            return kmerAdjacencySet.findOrAdd(reverseComplement(kVal), KmerAdjacency::new).rc();
-        }
-/*
-        private static long kVal( final byte[] calls, final int start ) {
-            long kVal = 0;
-            final int end = start + KSIZE;
-            int idx = start;
-            while ( idx != end ) {
-                kVal <<= 2;
-                switch ( calls[idx++] ) {
-                    case 'C': kVal += 1; break;
-                    case 'G': kVal += 2; break;
-                    case 'T': kVal += 3; break;
-                    default: throw new GATKException("non-ACGT call isn't supposed to happen");
-                }
-            }
-            return kVal;
-        }
-*/
-
-        // Lookup table for reverse-complementing each possible byte value.
-        // Each pair of bits represents a base, so you have to reverse bits pairwise and then invert all bits.
-        // This is most quickly and easily done with a lookup table.
-        private static final long[] BYTEWISE_REVERSE_COMPLEMENT;
-        static {
-            BYTEWISE_REVERSE_COMPLEMENT = new long[256];
-            for ( int bIn = 0; bIn != 256; ++bIn ) {
-                BYTEWISE_REVERSE_COMPLEMENT[bIn] =
-                        ~(((bIn & 3) << 6) | (((bIn >> 2) & 3) << 4) | (((bIn >> 4) & 3) << 2) | ((bIn >> 6) & 3)) & 0xffL;
-            }
-        }
-
-        public static long reverseComplement( long val ) {
-            // process val one byte at a time
-            long result = BYTEWISE_REVERSE_COMPLEMENT[(int)val & 0xFF]; // handle the low-order byte
-            int nBytes = 8;
-            while ( --nBytes != 0 ) { // pre-decrementing:  we'll go through the loop 7 times
-                // rotate down by a byte
-                val >>= 8;
-                // rotate up by a byte and OR in the reverse complement of the next byte
-                result = (result << 8) | BYTEWISE_REVERSE_COMPLEMENT[(int)val & 0xFF];
-            }
-            return result >>> (Long.SIZE - 2*KSIZE);
         }
     }
 
@@ -1208,7 +1242,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public ContigImpl( final Contig predecessor, final Contig successor ) {
             final StringBuilder sb = new StringBuilder(predecessor.getSequence());
             final CharSequence successorSequence = successor.getSequence();
-            sb.append(successorSequence.subSequence(KSIZE - 1, successorSequence.length()));
+            sb.append(successorSequence.subSequence(Kmer.KSIZE - 1, successorSequence.length()));
             this.sequence = sb.toString();
             this.maxObservations = Math.max(predecessor.getMaxObservations(), successor.getMaxObservations());
             this.firstKmer = predecessor.getFirstKmer();
@@ -1333,7 +1367,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public void extendPath() { stop += 1; }
         public PathPart rc() {
             if ( contig == null ) return this;
-            final int revBase = contig.size() - KSIZE + 1;
+            final int revBase = contig.size() - Kmer.KSIZE + 1;
             return new PathPart(contig.rc(), revBase - stop, revBase - start);
         }
     }
@@ -1414,8 +1448,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     case 'T': case 't': kVal += 3; break;
                     case 'N': case 'n': calls[idx] = 'A'; break;
                 }
-                if ( ++count >= KSIZE ) {
-                    final KmerAdjacency kmer = KmerAdjacency.find(kVal, kmerAdjacencySet);
+                if ( ++count >= Kmer.KSIZE ) {
+                    final KmerAdjacency kmer = KmerAdjacencyImpl.find(kVal, kmerAdjacencySet);
                     Contig contig;
                     final int contigOffset;
                     // if we fail to look up the kmer (or if it's a suppressed kmer with no contig)
@@ -1428,7 +1462,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                         } else if ( currentPathPart.isGap() ) {
                             // if the current path part is NoKmer, just extend it
                             currentPathPart.extendPath();
-                        } else if ( (contigOffset = currentPathPart.getStop() + KSIZE -1) <
+                        } else if ( (contigOffset = currentPathPart.getStop() + Kmer.KSIZE -1) <
                                 (contig = currentPathPart.getContig()).size() ) {
                             // if the current path part is on some contig, note the mismatch and extend it
                             errors.add(new Error(contig, contigOffset, call, quals[idx]));
@@ -1487,7 +1521,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                             // path it in the forward direction recursively, and rc that path.
                             parts.remove( parts.size() - 1);
                             final int end = idx + 1;
-                            final int start = end - KSIZE - currentPathPart.getStop();
+                            final int start = end - Kmer.KSIZE - currentPathPart.getStop();
                             final byte[] rcCalls = Arrays.copyOfRange(calls, start, end);
                             SequenceUtil.reverseComplement(rcCalls);
                             final byte[] rQuals = Arrays.copyOfRange(quals, start, end);
@@ -1518,7 +1552,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 } else {
                     final Contig contig = pp.getContig();
                     sb.append(contigNames.get(contig));
-                    final int maxStop = contig.size() - KSIZE + 1;
+                    final int maxStop = contig.size() - Kmer.KSIZE + 1;
                     if ( (pp != firstPart && pp.getStart() != 0) ||
                          (pp != lastPart && pp.getStop() != maxStop) ) {
                         sb.append('(').append(pp.getStart()).append('-').append(pp.getStop()).append('/');
