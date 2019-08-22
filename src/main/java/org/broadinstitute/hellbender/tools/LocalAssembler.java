@@ -99,7 +99,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             }
         }
         //weldPipes(contigs);
-        markComponents(contigs);
+        markComponentsAndCycles(contigs);
         dumpDOT(contigs, contigNames, "assembly.dot");
         writeContigs(contigs, contigNames);
     }
@@ -390,7 +390,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 */
 
-    private static void markComponents( final List<ContigImpl> contigs ) {
+    private static void markComponentsAndCycles( final List<ContigImpl> contigs ) {
+        for ( final ContigImpl contig : contigs ) {
+            contig.setComponentId(0);
+            contig.setCyclic(false);
+        }
         int componentId = 0;
         for ( final ContigImpl contig : contigs ) {
             if ( contig.getComponentId() == 0 ) {
@@ -1182,6 +1186,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         int getComponentId();
         int size();
         Contig rc();
+        boolean isCyclic();
+        void setCyclic( final boolean cyclic );
         boolean isCanonical();
         ContigImpl canonical();
     }
@@ -1194,6 +1200,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         private final List<Contig> predecessors;
         private final List<Contig> successors;
         private int componentId;
+        private boolean cyclic;
         private final Contig rc;
 
         public ContigImpl( final CharSequence sequence, final int maxObservations,
@@ -1265,6 +1272,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public int getComponentId() { return componentId; }
         @Override public int size() { return sequence.length(); }
         @Override public Contig rc() { return rc; }
+        @Override public boolean isCyclic() { return cyclic; }
+        @Override public void setCyclic( final boolean cyclic ) { this.cyclic = cyclic; }
         @Override public boolean isCanonical() { return true; }
         @Override public ContigImpl canonical() { return this; }
     }
@@ -1297,6 +1306,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public int getComponentId() { return rc.getComponentId(); }
         @Override public int size() { return sequence.length(); }
         @Override public Contig rc() { return rc; }
+        @Override public boolean isCyclic() { return rc.isCyclic(); }
+        @Override public void setCyclic( final boolean cyclic ) { rc.setCyclic(cyclic); }
         @Override public boolean isCanonical() { return false; }
         @Override public ContigImpl canonical() { return rc; }
 
