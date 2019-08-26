@@ -34,45 +34,27 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     @Override public void traverseReads() {
         final KmerSet<KmerAdjacency> kmerAdjacencySet = new KmerSet<>(1000000);
-        forEachRead( (read, ref, feature, nReadsProcessed) -> {
-            final byte[] calls = read.getBasesNoCopy();
-            final byte[] quals = read.getBaseQualitiesNoCopy();
-            KmerAdjacencyImpl.kmerize(calls, quals, QMIN, kmerAdjacencySet); });
-
+        final int nReads = kmerizeReadsPass(kmerAdjacencySet);
         final List<ContigImpl> contigs = buildContigs(kmerAdjacencySet);
         connectContigs(contigs);
         removeThinContigs(contigs, kmerAdjacencySet);
         weldPipes(contigs);
         final Map<Contig, String> contigNames = nameContigs(contigs);
+
+        final List<Path> readPaths = new ArrayList<>(nReads);
         final List<Error> errors = new ArrayList<>();
         final Map<GapFill, Integer> gapFillCountMap = new HashMap<>();
-        forEachRead( (read, ref, feature, nReadsProcessed) -> {
-            final int nErrorsToStart = errors.size();
-            final Path path = new Path(read.getBasesNoCopy(), read.getBaseQualitiesNoCopy(), kmerAdjacencySet, errors);
-            final List<PathPart> parts = path.getParts();
-            final int nParts = parts.size();
-            for ( int idx = 1; idx < nParts - 1; ++idx ) {
-                final PathPart pathPart = parts.get(idx);
-                if ( pathPart.isGap() ) {
-                    final Contig start = parts.get(idx-1).getContig();
-                    final Contig end = parts.get(idx+1).getContig();
-                    if ( start.canonical().getSequence().toString().compareTo(end.canonical().getSequence().toString()) <= 0 ) {
-                        gapFillCountMap.merge(new GapFill(start, end, pathPart.getLength()), 1, Integer::sum);
-                    } else {
-                        gapFillCountMap.merge(new GapFill(end.rc(), start.rc(), pathPart.getLength()), 1, Integer::sum);
-                    }
-                }
-            }
-            final int nErrors = errors.size() - nErrorsToStart;
-            final String readIdx = (nReadsProcessed + 1) + ": ";
-            final String pathDesc = path.toString(contigNames);
-            if ( nErrors == 0 ) {
-                System.out.println(readIdx + pathDesc);
-            } else {
-                System.out.println(readIdx + pathDesc + " with " + nErrors + " errors");
-            }
-        });
+        pathReadsPass(kmerAdjacencySet, contigNames, readPaths, errors, gapFillCountMap);
 
+        fillGaps(contigs, contigNames, gapFillCountMap);
+        markComponentsAndCycles(contigs);
+        dumpDOT(contigs, contigNames, "assembly.dot");
+        writeContigs(contigs, contigNames);
+    }
+
+    private static void fillGaps( final List<ContigImpl> contigs,
+                                  final Map<Contig, String> contigNames,
+                                  final Map<GapFill, Integer> gapFillCountMap ) {
         int nGapTigs = 0;
         for ( final Map.Entry<GapFill, Integer> entry : gapFillCountMap.entrySet() ) {
             final GapFill gapFill = entry.getKey();
@@ -98,10 +80,17 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 end.getPredecessors().add(gapTig);
             }
         }
-        //weldPipes(contigs);
-        markComponentsAndCycles(contigs);
-        dumpDOT(contigs, contigNames, "assembly.dot");
-        writeContigs(contigs, contigNames);
+    }
+
+    private int kmerizeReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+        int[] nReads = new int[1];
+        forEachRead( (read, ref, feature, nReadsProcessed) -> {
+            final byte[] calls = read.getBasesNoCopy();
+            final byte[] quals = read.getBaseQualitiesNoCopy();
+            KmerAdjacencyImpl.kmerize(calls, quals, QMIN, kmerAdjacencySet);
+            nReads[0] += 1;
+        });
+        return nReads[0];
     }
 
     private static List<ContigImpl> buildContigs( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
@@ -395,6 +384,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             contig.setComponentId(0);
             contig.setCyclic(false);
         }
+
         int componentId = 0;
         for ( final ContigImpl contig : contigs ) {
             if ( contig.getComponentId() == 0 ) {
@@ -408,7 +398,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
     private static void markSuccessorComponents( final Contig contig ) {
         final int componentId = contig.getComponentId();
         for ( final Contig successor : contig.getSuccessors() ) {
-            if ( successor.getComponentId() != componentId ) {
+            if ( successor.getComponentId() == 0 ) {
                 successor.canonical().setComponentId(componentId);
                 markSuccessorComponents(successor);
                 markSuccessorComponents(successor.rc());
@@ -469,6 +459,40 @@ public class LocalAssembler extends MultiplePassReadWalker {
             contigNames.put( contig.rc(), contigName + "RC");
         }
         return contigNames;
+    }
+
+    private void pathReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet,
+                                final Map<Contig, String> contigNames,
+                                final List<Path> paths,
+                                final List<Error> errors,
+                                final Map<GapFill, Integer> gapFillCountMap ) {
+        forEachRead( (read, ref, feature, nReadsProcessed) -> {
+            final int nErrorsToStart = errors.size();
+            final Path path = new Path(read.getBasesNoCopy(), read.getBaseQualitiesNoCopy(), kmerAdjacencySet, errors);
+            paths.add(path);
+            final List<PathPart> parts = path.getParts();
+            final int nParts = parts.size();
+            for ( int idx = 1; idx < nParts - 1; ++idx ) {
+                final PathPart pathPart = parts.get(idx);
+                if ( pathPart.isGap() ) {
+                    final Contig start = parts.get(idx-1).getContig();
+                    final Contig end = parts.get(idx+1).getContig();
+                    if ( start.canonical().getSequence().toString().compareTo(end.canonical().getSequence().toString()) <= 0 ) {
+                        gapFillCountMap.merge(new GapFill(start, end, pathPart.getLength()), 1, Integer::sum);
+                    } else {
+                        gapFillCountMap.merge(new GapFill(end.rc(), start.rc(), pathPart.getLength()), 1, Integer::sum);
+                    }
+                }
+            }
+            final int nErrors = errors.size() - nErrorsToStart;
+            final String readIdx = (nReadsProcessed + 1) + ": ";
+            final String pathDesc = path.toString(contigNames);
+            if ( nErrors == 0 ) {
+                System.out.println(readIdx + pathDesc);
+            } else {
+                System.out.println(readIdx + pathDesc + " with " + nErrors + " errors");
+            }
+        });
     }
 
     private static void dumpDOT( final List<ContigImpl> contigs,
@@ -890,7 +914,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     public static abstract class KmerAdjacency extends Kmer {
-        public KmerAdjacency( long kVal ) { super(kVal); }
+        public KmerAdjacency( final long kVal ) { super(kVal); }
 
         public abstract KmerAdjacency getSolePredecessor();
         public abstract int getPredecessorMask();
@@ -962,8 +986,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     public static final class KmerAdjacencyRC extends KmerAdjacency {
-        private KmerAdjacencyImpl rc;
-        private static int[] NIBREV =
+        private final KmerAdjacencyImpl rc;
+        private static final int[] NIBREV =
         // 0000,  0001,  0010,  0011,  0100,  0101,  0110,  0111,  1000,  1001,  1010,  1011,  1100,  1101,  1110,  1111
         {0b0000,0b1000,0b0100,0b1100,0b0010,0b1010,0b0110,0b1110,0b0001,0b1001,0b0101,0b1101,0b0011,0b1011,0b0111,0b1111};
 
@@ -1295,11 +1319,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public int getMaxObservations() { return rc.getMaxObservations(); }
         @Override public KmerAdjacency getFirstKmer() {
             final KmerAdjacency kmer = rc.getFirstKmer();
-            return kmer == null ? kmer : kmer.rc();
+            return kmer == null ? null : kmer.rc();
         }
         @Override public KmerAdjacency getLastKmer() {
             final KmerAdjacency kmer = rc.getLastKmer();
-            return kmer == null ? kmer : kmer.rc();
+            return kmer == null ? null : kmer.rc();
         }
         @Override public List<Contig> getPredecessors() { return predecessors; }
         @Override public List<Contig> getSuccessors() { return successors; }
@@ -1433,7 +1457,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
     public static final class Path {
         private final List<PathPart> parts;
 
-        // odd RCing constructor
+        // RCing constructor
         private Path( final Path that ) {
             parts = new ArrayList<>();
             final List<PathPart> thoseParts = that.parts;
@@ -1442,10 +1466,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
             }
         }
 
-        public Path( final byte[] calls,
+        public Path( final byte[] readCalls,
                      final byte[] quals,
                      final KmerSet<KmerAdjacency> kmerAdjacencySet,
                      final List<Error> errors ) {
+            byte[] calls = readCalls;
             parts = new ArrayList<>();
             long kVal = 0;
             int count = 0;
@@ -1457,7 +1482,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     case 'C': case 'c': kVal += 1; break;
                     case 'G': case 'g': kVal += 2; break;
                     case 'T': case 't': kVal += 3; break;
-                    case 'N': case 'n': calls[idx] = 'A'; break;
+                    case 'N': case 'n':
+                        if ( readCalls == calls ) {
+                            calls = Arrays.copyOf(readCalls, readCalls.length);
+                        }
+                        calls[idx] = 'A';
+                        break;
                 }
                 if ( ++count >= Kmer.KSIZE ) {
                     final KmerAdjacency kmer = KmerAdjacencyImpl.find(kVal, kmerAdjacencySet);
