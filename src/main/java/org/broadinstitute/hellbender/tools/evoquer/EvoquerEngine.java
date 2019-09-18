@@ -211,7 +211,7 @@ class EvoquerEngine {
 
         if ( contigToPositionTableMap.containsKey(interval.getContig()) ) {
             // Get the query string:
-            final String variantQueryString = getVariantQueryString(interval);
+            final String variantQueryString = getOptimizedVariantQueryString(interval);
 
             // Execute the query:
             final BigQueryUtils.StorageAPIAvroReader storageAPIAvroReader = BigQueryUtils.executeQueryWithStorageAPI(variantQueryString, runQueryInBatchMode);
