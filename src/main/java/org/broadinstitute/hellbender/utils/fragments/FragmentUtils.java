@@ -6,10 +6,6 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.OptionalInt;
-
 public final class FragmentUtils {
     private FragmentUtils() {}
 
@@ -24,12 +20,10 @@ public final class FragmentUtils {
      * are not treated independently.  Sets the qualities of firstRead and secondRead to mimic a merged read or
      * nothing if the algorithm cannot create a meaningful one
      * @param pair two overlapping paired reads
-     * @param setConflictingToZero if true, set base qualities to zero when mates have different base at overlapping position
-     * @param halfOfPcrSnvQual half of phred-scaled quality of substitution errors from PCR. May not be negative.
-     * @param halfOfPcrIndelQual half of phred-scaled quality of indel errors from PCR. May not be negative.
+     * @param pcrSnvQual phred-scaled quality of substitution errors from PCR. May not be negative.
+     * @param pcrIndelQual phred-scaled quality of indel errors from PCR. May not be negative.
      */
-    public static void adjustQualsOfOverlappingPairedFragments(final Pair<GATKRead, GATKRead> pair, final boolean setConflictingToZero,
-                                                               final OptionalInt halfOfPcrSnvQual, final OptionalInt   halfOfPcrIndelQual) {
+    public static void adjustQualsOfOverlappingPairedFragments(final Pair<GATKRead, GATKRead> pair, final int pcrSnvQual, final int pcrIndelQual) {
         final boolean inOrder = pair.getLeft().getSoftStart() < pair.getRight().getSoftStart();
         final GATKRead firstRead = inOrder ? pair.getLeft() : pair.getRight();
         final GATKRead secondRead = inOrder ? pair.getRight() : pair.getLeft();
@@ -53,7 +47,8 @@ public final class FragmentUtils {
         final byte[] secondReadBases = secondRead.getBases();
         final byte[] secondReadQuals = secondRead.getBaseQualities();
 
-        final int halfOfPcrErrorQual = halfOfPcrSnvQual.orElse(HALF_OF_DEFAULT_PCR_SNV_ERROR_QUAL);
+        final int halfOfPcrErrorQual = pcrSnvQual / 2;
+        final int halfOfPcrIndelQual = pcrIndelQual / 2;
 
         for (int i = 0; i < numOverlappingBases; i++) {
 
@@ -64,37 +59,28 @@ public final class FragmentUtils {
             if (firstReadBase == secondReadBase) {
                 firstReadQuals[firstReadIndex] = (byte) Math.min(firstReadQuals[firstReadIndex], halfOfPcrErrorQual);
                 secondReadQuals[i] = (byte) Math.min(secondReadQuals[i], halfOfPcrErrorQual);
-            } else if (setConflictingToZero) {
-                // If downstream processing forces read pairs to support the same haplotype, setConflictingToZero should be false
-                // because the original base qualities of conflicting bases, when pegged to the same haplotype, will
-                // automatically weaken the strength of one another's evidence.  Furthermore, if one base if low quality
-                // and one is high it will essentially ignore the low quality base without compromising the high-quality base
-                firstReadQuals[firstReadIndex] = 0;
-                secondReadQuals[i] = 0;
             }
         }
         firstRead.setBaseQualities(firstReadQuals);
         secondRead.setBaseQualities(secondReadQuals);
 
-        if (halfOfPcrIndelQual.isPresent()) {
-            final int maxIndelQual = halfOfPcrIndelQual.getAsInt();
-            final byte[] firstReadInsertionQuals = ReadUtils.getBaseInsertionQualities(firstRead);
-            final byte[] firstReadDeletionQuals = ReadUtils.getBaseInsertionQualities(firstRead);
-            final byte[] secondReadInsertionQuals = ReadUtils.getBaseInsertionQualities(secondRead);
-            final byte[] secondReadDeletionQuals = ReadUtils.getBaseInsertionQualities(secondRead);
 
-            for (int i = 0; i < numOverlappingBases; i++) {
-                final int firstReadIndex = firstReadStop + i;
-                firstReadDeletionQuals[firstReadIndex] = (byte) Math.min(firstReadDeletionQuals[firstReadIndex], maxIndelQual);
-                firstReadInsertionQuals[firstReadIndex] = (byte) Math.min(firstReadInsertionQuals[firstReadIndex], maxIndelQual);
-                secondReadDeletionQuals[i] = (byte) Math.min(secondReadDeletionQuals[i], maxIndelQual);
-                secondReadInsertionQuals[i] = (byte) Math.min(secondReadInsertionQuals[i], maxIndelQual);
-            }
+        final byte[] firstReadInsertionQuals = ReadUtils.getBaseInsertionQualities(firstRead);
+        final byte[] firstReadDeletionQuals = ReadUtils.getBaseInsertionQualities(firstRead);
+        final byte[] secondReadInsertionQuals = ReadUtils.getBaseInsertionQualities(secondRead);
+        final byte[] secondReadDeletionQuals = ReadUtils.getBaseInsertionQualities(secondRead);
 
-            ReadUtils.setDeletionBaseQualities(firstRead, firstReadDeletionQuals);
-            ReadUtils.setInsertionBaseQualities(firstRead, firstReadInsertionQuals);
-            ReadUtils.setDeletionBaseQualities(secondRead, secondReadDeletionQuals);
-            ReadUtils.setInsertionBaseQualities(secondRead, secondReadInsertionQuals);
+        for (int i = 0; i < numOverlappingBases; i++) {
+            final int firstReadIndex = firstReadStop + i;
+            firstReadDeletionQuals[firstReadIndex] = (byte) Math.min(firstReadDeletionQuals[firstReadIndex], halfOfPcrIndelQual);
+            firstReadInsertionQuals[firstReadIndex] = (byte) Math.min(firstReadInsertionQuals[firstReadIndex], halfOfPcrIndelQual);
+            secondReadDeletionQuals[i] = (byte) Math.min(secondReadDeletionQuals[i], halfOfPcrIndelQual);
+            secondReadInsertionQuals[i] = (byte) Math.min(secondReadInsertionQuals[i], halfOfPcrIndelQual);
         }
+
+        ReadUtils.setDeletionBaseQualities(firstRead, firstReadDeletionQuals);
+        ReadUtils.setInsertionBaseQualities(firstRead, firstReadInsertionQuals);
+        ReadUtils.setDeletionBaseQualities(secondRead, secondReadDeletionQuals);
+        ReadUtils.setInsertionBaseQualities(secondRead, secondReadInsertionQuals);
     }
 }

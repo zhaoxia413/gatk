@@ -210,7 +210,7 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
     public List<VariantContext> callRegion(final AssemblyRegion originalAssemblyRegion, final ReferenceContext referenceContext, final FeatureContext featureContext ) {
         // divide PCR qual by two in order to get the correct total qual when treating paired reads as independent
         AssemblyBasedCallerUtils.cleanOverlappingReadPairs(originalAssemblyRegion.getReads(), samplesList, header,
-                false, OptionalInt.of(MTAC.pcrSnvQual /2), OptionalInt.of(MTAC.pcrIndelQual /2));
+                MTAC.pcrSnvQual, MTAC.pcrIndelQual);
 
         if ( !originalAssemblyRegion.isActive() || originalAssemblyRegion.size() == 0 ) {
             return emitReferenceConfidence() ? referenceModelForNoVariation(originalAssemblyRegion) : NO_CALLS;  //TODD: does this need to be finalized?
@@ -222,7 +222,7 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
                 .filter(vc -> MTAC.forceCallFiltered || vc.isNotFiltered()).collect(Collectors.toList());
 
         final AssemblyRegion assemblyActiveRegion = AssemblyBasedCallerUtils.assemblyRegionWithWellMappedReads(originalAssemblyRegion, READ_QUALITY_FILTER_THRESHOLD, header);
-        final AssemblyResultSet untrimmedAssemblyResult = AssemblyBasedCallerUtils.assembleReads(assemblyActiveRegion, givenAlleles, MTAC, header, samplesList, logger, referenceReader, assemblyEngine, aligner, false);
+        final AssemblyResultSet untrimmedAssemblyResult = AssemblyBasedCallerUtils.assembleReads(assemblyActiveRegion, givenAlleles, MTAC, header, samplesList, logger, referenceReader, assemblyEngine, aligner);
 
         final SortedSet<VariantContext> allVariationEvents = untrimmedAssemblyResult.getVariationEvents(MTAC.maxMnpDistance);
         final AssemblyRegionTrimmer.Result trimmingResult = trimmer.trim(originalAssemblyRegion, allVariationEvents);
@@ -440,7 +440,7 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
      */
     private List<VariantContext> referenceModelForNoVariation(final AssemblyRegion region) {
         // don't correct overlapping base qualities because we did that upstream
-        AssemblyBasedCallerUtils.finalizeRegion(region, false, true, (byte)9, header, samplesList, false);  //take off soft clips and low Q tails before we calculate likelihoods
+        AssemblyBasedCallerUtils.finalizeRegion(region, false, true, (byte)9, header);  //take off soft clips and low Q tails before we calculate likelihoods
         final SimpleInterval paddedLoc = region.getExtendedSpan();
         final Haplotype refHaplotype = AssemblyBasedCallerUtils.createReferenceHaplotype(region, paddedLoc, referenceReader);
         final List<Haplotype> haplotypes = Collections.singletonList(refHaplotype);

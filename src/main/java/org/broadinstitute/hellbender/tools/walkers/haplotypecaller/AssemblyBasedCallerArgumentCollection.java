@@ -13,6 +13,8 @@ import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAligner;
  * Set of arguments for Assembly Based Callers
  */
 public abstract class AssemblyBasedCallerArgumentCollection {
+    public static final String PCR_SNV_QUAL_LONG_NAME = "pcr-snv-qual";
+    public static final String PCR_INDEL_QUAL_LONG_NAME = "pcr-indel-qual";
     private static final long serialVersionUID = 1L;
     public static final String USE_FILTERED_READS_FOR_ANNOTATIONS_LONG_NAME = "use-filtered-reads-for-annotations";
     public static final String BAM_OUTPUT_LONG_NAME = "bam-output";
@@ -30,6 +32,8 @@ public abstract class AssemblyBasedCallerArgumentCollection {
     public static final String FORCE_CALL_FILTERED_ALLELES_SHORT_NAME = "genotype-filtered-alleles";
     public static final String EMIT_REF_CONFIDENCE_LONG_NAME = "emit-ref-confidence";
     public static final String EMIT_REF_CONFIDENCE_SHORT_NAME = "ERC";
+    public static final int DEFAULT_PCR_SNV_QUAL = 40;
+    public static final int DEFAULT_PCR_INDEL_QUAL = 40;
 
     public ReadThreadingAssembler createReadThreadingAssembler() {
         final ReadThreadingAssembler assemblyEngine = assemblerArgs.makeReadThreadingAssembler();
@@ -136,4 +140,10 @@ public abstract class AssemblyBasedCallerArgumentCollection {
     @Advanced
     @Argument(fullName = FORCE_CALL_FILTERED_ALLELES_LONG_NAME, shortName = FORCE_CALL_FILTERED_ALLELES_SHORT_NAME, doc = "Force-call filtered alleles included in the resource specified by --alleles", optional = true)
     public boolean forceCallFiltered = false;
+
+    @Argument(fullName = PCR_SNV_QUAL_LONG_NAME, optional = true, doc = "Phred-scaled PCR SNV qual for overlapping fragments")
+    public int pcrSnvQual = DEFAULT_PCR_SNV_QUAL;
+
+    @Argument(fullName = PCR_INDEL_QUAL_LONG_NAME, optional = true, doc = "Phred-scaled PCR SNV qual for overlapping fragments")
+    public int pcrIndelQual = DEFAULT_PCR_INDEL_QUAL;
 }

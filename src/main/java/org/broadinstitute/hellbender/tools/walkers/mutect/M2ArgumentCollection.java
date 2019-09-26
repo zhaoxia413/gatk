@@ -45,8 +45,6 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
     public static final String IGNORE_ITR_ARTIFACTS_LONG_NAME = "ignore-itr-artifacts";
     public static final String MITOCHONDRIA_MODE_LONG_NAME = "mitochondria-mode";
     public static final String CALLABLE_DEPTH_LONG_NAME = "callable-depth";
-    public static final String PCR_SNV_QUAL_LONG_NAME = "pcr-snv-qual";
-    public static final String PCR_INDEL_QUAL_LONG_NAME = "pcr-indel-qual";
     public static final String F1R2_TAR_GZ_NAME = "f1r2-tar-gz";
 
     public static final double DEFAULT_AF_FOR_TUMOR_ONLY_CALLING = 5e-8;
@@ -183,13 +181,6 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
         }
         return MathUtils.log10ToLog(mitochondria && initialLog10Odds == DEFAULT_INITIAL_LOG_10_ODDS ? DEFAULT_MITO_INITIAL_LOG_10_ODDS : initialLog10Odds);
     }
-
-
-    @Argument(fullName = PCR_SNV_QUAL_LONG_NAME, optional = true, doc = "Phred-scaled PCR SNV qual for overlapping fragments")
-    public int pcrSnvQual = 40;
-
-    @Argument(fullName = PCR_INDEL_QUAL_LONG_NAME, optional = true, doc = "Phred-scaled PCR SNV qual for overlapping fragments")
-    public int pcrIndelQual = 40;
 
     /**
      * In tumor-only mode, we discard variants with population allele frequencies greater than this threshold.

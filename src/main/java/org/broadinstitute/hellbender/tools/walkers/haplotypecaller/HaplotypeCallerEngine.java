@@ -535,6 +535,8 @@ public final class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
             // No reads here so nothing to do!
             return referenceModelForNoVariation(region, true, VCpriors);
         }
+        
+        AssemblyBasedCallerUtils.cleanOverlappingReadPairs(region.getReads(), samplesList, readsHeader, hcArgs.pcrSnvQual, hcArgs.pcrIndelQual /2);
 
         if (assemblyDebugOutStream != null) {
             assemblyDebugOutStream.println("\n\n\n\n"+region.getSpan()+"\nNumber of reads in region: " + region.getReads().size() + "     they are:");
@@ -544,7 +546,7 @@ public final class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
         }
 
         // run the local assembler, getting back a collection of information on how we should proceed
-        final AssemblyResultSet untrimmedAssemblyResult =  AssemblyBasedCallerUtils.assembleReads(region, givenAlleles, hcArgs, readsHeader, samplesList, logger, referenceReader, assemblyEngine, aligner, !hcArgs.doNotCorrectOverlappingBaseQualities);
+        final AssemblyResultSet untrimmedAssemblyResult =  AssemblyBasedCallerUtils.assembleReads(region, givenAlleles, hcArgs, readsHeader, samplesList, logger, referenceReader, assemblyEngine, aligner);
 
         if (assemblyDebugOutStream != null) {
             assemblyDebugOutStream.println("\nThere were " + untrimmedAssemblyResult.getHaplotypeList().size() + " haplotypes found. Here they are:");
@@ -690,7 +692,7 @@ public final class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
             //TODO - why the activeRegion cannot manage its own one-time finalization and filtering?
             //TODO - perhaps we can remove the last parameter of this method and the three lines bellow?
             if ( needsToBeFinalized ) {
-                AssemblyBasedCallerUtils.finalizeRegion(region, hcArgs.assemblerArgs.errorCorrectReads, hcArgs.dontUseSoftClippedBases, minTailQuality, readsHeader, samplesList, ! hcArgs.doNotCorrectOverlappingBaseQualities);
+                AssemblyBasedCallerUtils.finalizeRegion(region, hcArgs.assemblerArgs.errorCorrectReads, hcArgs.dontUseSoftClippedBases, minTailQuality, readsHeader);
             }
             filterNonPassingReads(region);
 
