@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.genotyper;
 
+import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.GenotypeLikelihoods;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -37,7 +38,7 @@ public final class IndependentSampleGenotypesModel {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public <A extends Allele> GenotypingLikelihoods<A> calculateLikelihoods(final AlleleList<A> genotypingAlleles, final GenotypingData<A> data) {
+    public <A extends Allele,EVIDENCE extends Locatable> GenotypingLikelihoods<A> calculateLikelihoods(final AlleleList<A> genotypingAlleles, final GenotypingData<A, EVIDENCE> data) {
         Utils.nonNull(genotypingAlleles, "the allele cannot be null");
         Utils.nonNull(data, "the genotyping data cannot be null");
 
@@ -58,7 +59,7 @@ public final class IndependentSampleGenotypesModel {
                 likelihoodsCalculator = getLikelihoodsCalculator(samplePloidy, alleleCount);
             }
 
-            final LikelihoodMatrix<GATKRead, A> sampleLikelihoods = alleleLikelihoodMatrixMapper.mapAlleles(data.readLikelihoods().sampleMatrix(i));
+            final LikelihoodMatrix<EVIDENCE, A> sampleLikelihoods = alleleLikelihoodMatrixMapper.mapAlleles(data.getLikelihoods().sampleMatrix(i));
             genotypeLikelihoods.add(likelihoodsCalculator.genotypeLikelihoods(sampleLikelihoods));
         }
         return new GenotypingLikelihoods<>(genotypingAlleles, ploidyModel, genotypeLikelihoods);

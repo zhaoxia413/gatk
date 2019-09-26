@@ -52,14 +52,14 @@ public class SomaticGenotypingEngine {
      * genotype likelihoods and assemble into a list of variant contexts and genomic events ready for calling
      *
      * The list of samples we're working with is obtained from the readLikelihoods
-     * @param logReadLikelihoods                       Map from reads->(haplotypes,likelihoods)
+     * @param logReadHaplotypeLikelihoods                       Map from reads->(haplotypes,likelihoods)
      * @param activeRegionWindow                     Active window
      * @param withBamOut                            whether to annotate reads in readLikelihoods for future writing to bamout
      * @param emitRefConf                           generate reference confidence (GVCF) data?
      * @return                                       A CalledHaplotypes object containing a list of VC's with genotyped events and called haplotypes
      */
     public CalledHaplotypes callMutations(
-            final AlleleLikelihoods<GATKRead, Haplotype> logReadLikelihoods,
+            final AlleleLikelihoods<GATKRead, Haplotype> logReadHaplotypeLikelihoods,
             final AssemblyResultSet assemblyResultSet,
             final ReferenceContext referenceContext,
             final SimpleInterval activeRegionWindow,
@@ -68,11 +68,11 @@ public class SomaticGenotypingEngine {
             final SAMFileHeader header,
             final boolean withBamOut,
             final boolean emitRefConf) {
-        Utils.nonNull(logReadLikelihoods);
-        Utils.validateArg(logReadLikelihoods.numberOfSamples() > 0, "likelihoods have no samples");
+        Utils.nonNull(logReadHaplotypeLikelihoods);
+        Utils.validateArg(logReadHaplotypeLikelihoods.numberOfSamples() > 0, "likelihoods have no samples");
         Utils.nonNull(activeRegionWindow);
 
-        final List<Haplotype> haplotypes = logReadLikelihoods.alleles();
+        final List<Haplotype> haplotypes = logReadHaplotypeLikelihoods.alleles();
 
         final List<Integer> startPosKeySet = EventMap.buildEventMapsForHaplotypes(haplotypes, assemblyResultSet.getFullReferenceWithPadding(),
                 assemblyResultSet.getPaddedReferenceLoc(), MTAC.assemblerArgs.debugAssembly, MTAC.maxMnpDistance).stream()
@@ -84,13 +84,13 @@ public class SomaticGenotypingEngine {
 
         if(withBamOut){
             //add annotations to reads for alignment regions and calling regions
-            AssemblyBasedCallerUtils.annotateReadLikelihoodsWithRegions(logReadLikelihoods, activeRegionWindow);
+            AssemblyBasedCallerUtils.annotateReadLikelihoodsWithRegions(logReadHaplotypeLikelihoods, activeRegionWindow);
         }
 
         if (MTAC.likelihoodArgs.phredScaledGlobalReadMismappingRate > 0) {
-            logReadLikelihoods.normalizeLikelihoods(NaturalLogUtils.qualToLogErrorProb(MTAC.likelihoodArgs.phredScaledGlobalReadMismappingRate));
+            logReadHaplotypeLikelihoods.normalizeLikelihoods(NaturalLogUtils.qualToLogErrorProb(MTAC.likelihoodArgs.phredScaledGlobalReadMismappingRate));
         }
-        final AlleleLikelihoods<Fragment, Haplotype> logFragmentLikelihoods = logReadLikelihoods.groupEvidence(MTAC.independentMates ? read -> read : GATKRead::getName, Fragment::createAndAvoidFailure);
+        final AlleleLikelihoods<Fragment, Haplotype> logFragmentHaplotypeLikelihoods = logReadHaplotypeLikelihoods.groupEvidence(MTAC.independentMates ? read -> read : GATKRead::getName, Fragment::createAndAvoidFailure);
 
         for( final int loc : startPosKeySet ) {
             final List<VariantContext> eventsAtThisLoc = AssemblyBasedCallerUtils.getVariantContextsFromActiveHaplotypes(loc, haplotypes, false);
@@ -101,24 +101,24 @@ public class SomaticGenotypingEngine {
 
             // converting haplotype likelihoods to allele likelihoods
             final Map<Allele, List<Haplotype>> alleleMapper = AssemblyBasedCallerUtils.createAlleleMapper(mergedVC, loc, haplotypes);
-            final AlleleLikelihoods<Fragment, Allele> logLikelihoods = logFragmentLikelihoods.marginalize(alleleMapper,
+            final AlleleLikelihoods<Fragment, Allele> logFragmentAlleleLikelihoods = logFragmentHaplotypeLikelihoods.marginalize(alleleMapper,
                     new SimpleInterval(mergedVC).expandWithinContig(HaplotypeCallerGenotypingEngine.ALLELE_EXTENSION, header.getSequenceDictionary()));
 
             if (emitRefConf) {
                 mergedVC = ReferenceConfidenceUtils.addNonRefSymbolicAllele(mergedVC);
-                logLikelihoods.addNonReferenceAllele(Allele.NON_REF_ALLELE);
+                logFragmentAlleleLikelihoods.addNonReferenceAllele(Allele.NON_REF_ALLELE);
             }
-            final List<LikelihoodMatrix<Fragment, Allele>> tumorMatrices = IntStream.range(0, logLikelihoods.numberOfSamples())
-                    .filter(n -> !normalSamples.contains(logLikelihoods.getSample(n)))
-                    .mapToObj(logLikelihoods::sampleMatrix)
+            final List<LikelihoodMatrix<Fragment, Allele>> tumorMatrices = IntStream.range(0, logFragmentAlleleLikelihoods.numberOfSamples())
+                    .filter(n -> !normalSamples.contains(logFragmentAlleleLikelihoods.getSample(n)))
+                    .mapToObj(logFragmentAlleleLikelihoods::sampleMatrix)
                     .collect(Collectors.toList());
             final AlleleList<Allele> alleleList = tumorMatrices.get(0);
             final LikelihoodMatrix<Fragment, Allele> logTumorMatrix = combinedLikelihoodMatrix(tumorMatrices, alleleList);
             final PerAlleleCollection<Double> tumorLogOdds = somaticLogOdds(logTumorMatrix);
 
-            final List<LikelihoodMatrix<Fragment, Allele>> normalMatrices = IntStream.range(0, logLikelihoods.numberOfSamples())
-                    .filter(n -> normalSamples.contains(logLikelihoods.getSample(n)))
-                    .mapToObj(logLikelihoods::sampleMatrix)
+            final List<LikelihoodMatrix<Fragment, Allele>> normalMatrices = IntStream.range(0, logFragmentAlleleLikelihoods.numberOfSamples())
+                    .filter(n -> normalSamples.contains(logFragmentAlleleLikelihoods.getSample(n)))
+                    .mapToObj(logFragmentAlleleLikelihoods::sampleMatrix)
                     .collect(Collectors.toList());
             final LikelihoodMatrix<Fragment, Allele> logNormalMatrix = combinedLikelihoodMatrix(normalMatrices, alleleList);
             final PerAlleleCollection<Double> normalLogOdds = diploidAltLogOdds(logNormalMatrix);
@@ -161,17 +161,17 @@ public class SomaticGenotypingEngine {
                 callVcb.attribute(GATKVCFConstants.IN_PON_KEY, true);
             }
 
-            addGenotypes(logLikelihoods, allAllelesToEmit, callVcb);
+            addGenotypes(logFragmentAlleleLikelihoods, allAllelesToEmit, callVcb);
             final VariantContext call = callVcb.make();
             final VariantContext trimmedCall = GATKVariantContextUtils.trimAlleles(call, true, true);
             final List<Allele> trimmedAlleles = trimmedCall.getAlleles();
             final List<Allele> untrimmedAlleles = call.getAlleles();
             final Map<Allele, List<Allele>> trimmedToUntrimmedAlleleMap = IntStream.range(0, trimmedCall.getNAlleles()).boxed()
                     .collect(Collectors.toMap(n -> trimmedAlleles.get(n), n -> Arrays.asList(untrimmedAlleles.get(n))));
-            final AlleleLikelihoods<Fragment, Allele> trimmedLikelihoods = logLikelihoods.marginalize(trimmedToUntrimmedAlleleMap);
+            final AlleleLikelihoods<Fragment, Allele> trimmedFragmentAlleleLikelihoods = logFragmentAlleleLikelihoods.marginalize(trimmedToUntrimmedAlleleMap);
 
             // AlleleLikelihoods for annotation only
-            final AlleleLikelihoods<GATKRead, Allele> logReadAlleleLikelihoods = logReadLikelihoods.marginalize(alleleMapper,
+            final AlleleLikelihoods<GATKRead, Allele> logReadAlleleLikelihoods = logReadHaplotypeLikelihoods.marginalize(alleleMapper,
                     new SimpleInterval(mergedVC).expandWithinContig(HaplotypeCallerGenotypingEngine.ALLELE_EXTENSION, header.getSequenceDictionary()));
 
             if (emitRefConf) {
@@ -183,7 +183,7 @@ public class SomaticGenotypingEngine {
 
             final VariantContext annotatedCall =  annotationEngine.annotateContext(trimmedCall, featureContext, referenceContext, trimmedLikelihoodsForAnnotation, a -> true);
             if(withBamOut) {
-                AssemblyBasedCallerUtils.annotateReadLikelihoodsWithSupportedAlleles(trimmedCall, trimmedLikelihoods, Fragment::getReads);
+                AssemblyBasedCallerUtils.annotateReadLikelihoodsWithSupportedAlleles(trimmedCall, trimmedFragmentAlleleLikelihoods, Fragment::getReads);
             }
 
             call.getAlleles().stream().map(alleleMapper::get).filter(Objects::nonNull).forEach(calledHaplotypes::addAll);

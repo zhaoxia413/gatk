@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.genotyper;
 
+import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.Allele;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
@@ -10,11 +11,11 @@ import org.broadinstitute.hellbender.utils.read.GATKRead;
 /**
  * Encapsulates the data use to make the genotype calls.
  */
-public final class GenotypingData<A extends Allele> implements SampleList, AlleleList<A> {
+public final class GenotypingData<A extends Allele, EVIDENCE extends Locatable> implements SampleList, AlleleList<A> {
 
     private final PloidyModel ploidyModel;
 
-    private final AlleleLikelihoods<GATKRead, A> likelihoods;
+    private final AlleleLikelihoods<EVIDENCE, A> likelihoods;
 
     /**
      * Constructs a new genotyping-data collection providing the ploidy model to apply to the input model
@@ -27,7 +28,7 @@ public final class GenotypingData<A extends Allele> implements SampleList, Allel
      * @throws IllegalArgumentException if either {@code ploidyModel} or {@code likelihoods} is {@code null},
      *   or they are not compatible in terms of the samples they contain; their lists must match.
      */
-    public GenotypingData(final PloidyModel ploidyModel, final AlleleLikelihoods<GATKRead, A> likelihoods) {
+    public GenotypingData(final PloidyModel ploidyModel, final AlleleLikelihoods<EVIDENCE, A> likelihoods) {
         Utils.nonNull(ploidyModel, "the ploidy model cannot be null");
         Utils.nonNull(likelihoods, "the likelihood object cannot be null");
         this.ploidyModel = ploidyModel;
@@ -65,7 +66,7 @@ public final class GenotypingData<A extends Allele> implements SampleList, Allel
      * Returns read-likelihoods to use for genotyping.
      * @return never {@code null}.
      */
-    public AlleleLikelihoods<GATKRead, A> readLikelihoods() {
+    public AlleleLikelihoods<EVIDENCE, A> getLikelihoods() {
         return likelihoods;
     }
 

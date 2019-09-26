@@ -15,6 +15,7 @@ import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAligner;
 public abstract class AssemblyBasedCallerArgumentCollection {
     public static final String PCR_SNV_QUAL_LONG_NAME = "pcr-snv-qual";
     public static final String PCR_INDEL_QUAL_LONG_NAME = "pcr-indel-qual";
+    public static final String INDEPENDENT_MATES_LONG_NAME = "independent-mates";
     private static final long serialVersionUID = 1L;
     public static final String USE_FILTERED_READS_FOR_ANNOTATIONS_LONG_NAME = "use-filtered-reads-for-annotations";
     public static final String BAM_OUTPUT_LONG_NAME = "bam-output";
@@ -146,4 +147,9 @@ public abstract class AssemblyBasedCallerArgumentCollection {
 
     @Argument(fullName = PCR_INDEL_QUAL_LONG_NAME, optional = true, doc = "Phred-scaled PCR SNV qual for overlapping fragments")
     public int pcrIndelQual = DEFAULT_PCR_INDEL_QUAL;
+
+    @Advanced
+    @Argument(fullName = INDEPENDENT_MATES_LONG_NAME, doc = "Allow paired reads to independently support different haplotypes.  Useful for validations with ill-designed synthetic data.", optional = true)
+    public boolean independentMates = false;
+
 }

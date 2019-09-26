@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMFileHeader;
+import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -17,12 +18,14 @@ import org.broadinstitute.hellbender.utils.genotyper.*;
 import org.broadinstitute.hellbender.utils.haplotype.EventMap;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.param.ParamUtils;
+import org.broadinstitute.hellbender.utils.read.Fragment;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.reference.ReferenceBases;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * HaplotypeCaller's genotyping strategy implementation.
@@ -81,10 +84,10 @@ public class HaplotypeCallerGenotypingEngine extends GenotypingEngine<StandardCa
      * Main entry point of class - given a particular set of haplotypes, samples and reference context, compute
      * genotype likelihoods and assemble into a list of variant contexts and genomic events ready for calling
      *
-     * The list of samples we're working with is obtained from the readLikelihoods
+     * The list of samples we're working with is obtained from the logReadHaplotypeLikelihoods
      *
      * @param haplotypes                             Haplotypes to assign likelihoods to
-     * @param readLikelihoods                        Map from reads->(haplotypes,likelihoods)
+     * @param logReadHaplotypeLikelihoods                        Map from reads->(haplotypes,likelihoods)
      * @param perSampleFilteredReadList              Map from sample to reads that were filtered after assembly and before calculating per-read likelihoods.
      * @param ref                                    Reference bytes at active region
      * @param refLoc                                 Corresponding active region genome location
@@ -96,13 +99,13 @@ public class HaplotypeCallerGenotypingEngine extends GenotypingEngine<StandardCa
      *                       are merged until a substitution is separated from the previous one by a greater distance.
      *                       That is, if maxMnpDistance = 1, substitutions at 10,11,12,14,15,17 are partitioned into a MNP
      *                       at 10-12, a MNP at 14-15, and a SNP at 17.  May not be negative.
-     * @param withBamOut whether to annotate reads in readLikelihoods for future writing to bamout
+     * @param withBamOut whether to annotate reads in logReadHaplotypeLikelihoods for future writing to bamout
      *
      * @return                                       A CalledHaplotypes object containing a list of VC's with genotyped events and called haplotypes
      *
      */
     public CalledHaplotypes assignGenotypeLikelihoods(final List<Haplotype> haplotypes,
-                                                      final AlleleLikelihoods<GATKRead, Haplotype> readLikelihoods,
+                                                      final AlleleLikelihoods<GATKRead, Haplotype> logReadHaplotypeLikelihoods,
                                                       final Map<String, List<GATKRead>> perSampleFilteredReadList,
                                                       final byte[] ref,
                                                       final SimpleInterval refLoc,
@@ -115,7 +118,7 @@ public class HaplotypeCallerGenotypingEngine extends GenotypingEngine<StandardCa
                                                       final boolean withBamOut) {
         // sanity check input arguments
         Utils.nonEmpty(haplotypes, "haplotypes input should be non-empty and non-null");
-        Utils.validateArg(readLikelihoods != null && readLikelihoods.numberOfSamples() > 0, "readLikelihoods input should be non-empty and non-null");
+        Utils.validateArg(logReadHaplotypeLikelihoods != null && logReadHaplotypeLikelihoods.numberOfSamples() > 0, "logReadHaplotypeLikelihoods input should be non-empty and non-null");
         Utils.validateArg(ref != null && ref.length > 0, "ref bytes input should be non-empty and non-null");
         Utils.nonNull(refLoc, "refLoc must be non-null");
         Utils.validateArg(refLoc.size() == ref.length, " refLoc length must match ref bytes");
@@ -136,8 +139,10 @@ public class HaplotypeCallerGenotypingEngine extends GenotypingEngine<StandardCa
 
         if (withBamOut) {
             //add annotations to reads for alignment regions and calling regions
-            AssemblyBasedCallerUtils.annotateReadLikelihoodsWithRegions(readLikelihoods, activeRegionWindow);
+            AssemblyBasedCallerUtils.annotateReadLikelihoodsWithRegions(logReadHaplotypeLikelihoods, activeRegionWindow);
         }
+
+        final AlleleLikelihoods<Fragment, Haplotype> logFragmentHaplotypeLikelihoods = logReadHaplotypeLikelihoods.groupEvidence(hcArgs.independentMates ? read -> read : GATKRead::getName, Fragment::create);
 
         for( final int loc : startPosKeySet ) {
             if( loc < activeRegionWindow.getStart() || loc > activeRegionWindow.getEnd() ) {
@@ -165,29 +170,35 @@ public class HaplotypeCallerGenotypingEngine extends GenotypingEngine<StandardCa
 
             mergedVC = removeAltAllelesIfTooManyGenotypes(ploidy, alleleMapper, mergedVC);
 
-            AlleleLikelihoods<GATKRead, Allele> readAlleleLikelihoods = readLikelihoods.marginalize(alleleMapper, new SimpleInterval(mergedVC).expandWithinContig(ALLELE_EXTENSION, header.getSequenceDictionary()));
+            AlleleLikelihoods<Fragment, Allele> logFragmentAlleleLikelihoods = logFragmentHaplotypeLikelihoods.marginalize(alleleMapper, new SimpleInterval(mergedVC).expandWithinContig(ALLELE_EXTENSION, header.getSequenceDictionary()));
             if (configuration.isSampleContaminationPresent()) {
-                readAlleleLikelihoods.contaminationDownsampling(configuration.getSampleContamination());
+                logFragmentAlleleLikelihoods.contaminationDownsampling(configuration.getSampleContamination());
             }
+
+
+
+            // AlleleLikelihoods for annotation only
+            final AlleleLikelihoods<GATKRead, Allele> logReadAlleleLikelihoods = logReadHaplotypeLikelihoods.marginalize(alleleMapper,
+                    new SimpleInterval(mergedVC).expandWithinContig(HaplotypeCallerGenotypingEngine.ALLELE_EXTENSION, header.getSequenceDictionary()));
 
             if (emitReferenceConfidence) {
                 mergedVC = ReferenceConfidenceUtils.addNonRefSymbolicAllele(mergedVC);
-                readAlleleLikelihoods.addNonReferenceAllele(Allele.NON_REF_ALLELE);
+                logReadAlleleLikelihoods.addNonReferenceAllele(Allele.NON_REF_ALLELE);
                 mergedAllelesListSizeBeforePossibleTrimming++;
             }
 
-            final GenotypesContext genotypes = calculateGLsForThisEvent(readAlleleLikelihoods, mergedVC, noCallAlleles);
+            final GenotypesContext genotypes = calculateGLsForThisEvent(logFragmentAlleleLikelihoods, mergedVC, noCallAlleles);
             final VariantContext call = calculateGenotypes(new VariantContextBuilder(mergedVC).genotypes(genotypes).make(), getGLModel(mergedVC), givenAlleles);
             if( call != null ) {
 
-                readAlleleLikelihoods = prepareReadAlleleLikelihoodsForAnnotation(readLikelihoods, perSampleFilteredReadList,
-                        emitReferenceConfidence, alleleMapper, readAlleleLikelihoods, call);
+                final AlleleLikelihoods<GATKRead, Allele> readAlleleLikelihoodsForAnnotation = prepareReadAlleleLikelihoodsForAnnotation(logReadHaplotypeLikelihoods, perSampleFilteredReadList,
+                        emitReferenceConfidence, alleleMapper, logReadAlleleLikelihoods, call);
 
-                final VariantContext annotatedCall = makeAnnotatedCall(ref, refLoc, tracker, header, mergedVC, mergedAllelesListSizeBeforePossibleTrimming, readAlleleLikelihoods, call, annotationEngine);
+                final VariantContext annotatedCall = makeAnnotatedCall(ref, refLoc, tracker, header, mergedVC, mergedAllelesListSizeBeforePossibleTrimming, readAlleleLikelihoodsForAnnotation, call, annotationEngine);
                 returnCalls.add( annotatedCall );
 
                 if (withBamOut) {
-                    AssemblyBasedCallerUtils.annotateReadLikelihoodsWithSupportedAlleles(call, readAlleleLikelihoods);
+                    AssemblyBasedCallerUtils.annotateReadLikelihoodsWithSupportedAlleles(call, logFragmentAlleleLikelihoods, Fragment::getReads);
                 }
 
                 // maintain the set of all called haplotypes
@@ -368,16 +379,16 @@ public class HaplotypeCallerGenotypingEngine extends GenotypingEngine<StandardCa
 
     /**
      * For a particular event described in inputVC, form PL vector for each sample by looking into allele read map and filling likelihood matrix for each allele
-     * @param readLikelihoods          Allele map describing mapping from reads to alleles and corresponding likelihoods
+     * @param logLikelihoods          Allele map describing mapping from reads to alleles and corresponding likelihoods
      * @param mergedVC               Input VC with event to genotype
      * @return                       GenotypesContext object wrapping genotype objects with PLs
      */
-    protected GenotypesContext calculateGLsForThisEvent(final AlleleLikelihoods<GATKRead, Allele> readLikelihoods, final VariantContext mergedVC, final List<Allele> noCallAlleles ) {
-        Utils.nonNull(readLikelihoods, "readLikelihoods");
+    protected <EVIDENCE extends Locatable> GenotypesContext calculateGLsForThisEvent(final AlleleLikelihoods<EVIDENCE, Allele> logLikelihoods, final VariantContext mergedVC, final List<Allele> noCallAlleles ) {
+        Utils.nonNull(logLikelihoods, "logLikelihoods");
         Utils.nonNull(mergedVC, "mergedVC");
         final List<Allele> vcAlleles = mergedVC.getAlleles();
-        final AlleleList<Allele> alleleList = readLikelihoods.numberOfAlleles() == vcAlleles.size() ? readLikelihoods : new IndexedAlleleList<>(vcAlleles);
-        final GenotypingLikelihoods<Allele> likelihoods = genotypingModel.calculateLikelihoods(alleleList,new GenotypingData<>(ploidyModel,readLikelihoods));
+        final AlleleList<Allele> alleleList = logLikelihoods.numberOfAlleles() == vcAlleles.size() ? logLikelihoods : new IndexedAlleleList<>(vcAlleles);
+        final GenotypingLikelihoods<Allele> likelihoods = genotypingModel.calculateLikelihoods(alleleList,new GenotypingData<>(ploidyModel,logLikelihoods));
         final int sampleCount = samples.numberOfSamples();
         final GenotypesContext result = GenotypesContext.create(sampleCount);
         for (int s = 0; s < sampleCount; s++) {

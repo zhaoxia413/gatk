@@ -59,7 +59,6 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
     public static final int DEFAULT_CALLABLE_DEPTH = 10;
 
     public static final double DEFAULT_MITO_PRUNING_LOG_ODDS_THRESHOLD = MathUtils.log10ToLog(-4);
-    public static final String INDEPENDENT_MATES_LONG_NAME = "independent-mates";
     public static final String MINIMUM_ALLELE_FRACTION_LONG_NAME = "minimum-allele-fraction";
     public static final String MINIMUM_ALLELE_FRACTION_SHORT_NAME = "min-AF";
     public static final String LOD_BAND_LONG_NAME = "gvcf-lod-band";
@@ -246,8 +245,5 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
     @Advanced
     @Argument(fullName = MINIMUM_ALLELE_FRACTION_LONG_NAME, shortName = MINIMUM_ALLELE_FRACTION_SHORT_NAME, doc = "Lower bound of variant allele fractions to consider when calculating variant LOD", optional = true)
     public double minAF = 0.00;
-    
-    @Advanced
-    @Argument(fullName = INDEPENDENT_MATES_LONG_NAME, doc = "Allow paired reads to independently support different haplotypes.  Useful for validations with ill-designed synthetic data.", optional = true)
-    public boolean independentMates = false;
+
 }
