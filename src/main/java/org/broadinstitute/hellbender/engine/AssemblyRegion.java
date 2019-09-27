@@ -72,6 +72,11 @@ public final class AssemblyRegion implements Locatable {
     private boolean hasBeenFinalized;
 
     /**
+     * Indicates whether reads in the region have been downsampled
+     */
+    private boolean hasBeenDownsampled;
+
+    /**
      * Create a new AssemblyRegion containing no reads
      *
      * @param activeRegionLoc the span of this active region
@@ -504,5 +509,9 @@ public final class AssemblyRegion implements Locatable {
     public boolean isFinalized() {
         return hasBeenFinalized;
     }
+
+    public void setWasDownsampled(final boolean value) { hasBeenDownsampled = value; }
+
+    public boolean wasDownsampled() { return hasBeenDownsampled; }
 
 }

@@ -37,6 +37,8 @@ public class AlleleLikelihoods<EVIDENCE extends Locatable, A extends Allele> imp
 
     protected boolean isNaturalLog = false;
 
+    private boolean wasCoverageDownsampled = false;
+
     private double getInformativeThreshold() {
         return isNaturalLog ? NATURAL_LOG_INFORMATIVE_THRESHOLD : LOG_10_INFORMATIVE_THRESHOLD;
     }
@@ -314,6 +316,10 @@ public class AlleleLikelihoods<EVIDENCE extends Locatable, A extends Allele> imp
             removeSampleEvidence(s, evidenceToRemove, alleleCount);
         }
     }
+
+    public void setCoverageDownsamplingTrue() { wasCoverageDownsampled = true; }
+
+    public boolean getCoverageDownsamplingHistory() { return wasCoverageDownsampled; }
 
     /**
      * Adjusts likelihoods so that for each unit of evidence, the best allele likelihood is 0 and caps the minimum likelihood
@@ -709,6 +715,7 @@ public class AlleleLikelihoods<EVIDENCE extends Locatable, A extends Allele> imp
                 newEvidenceBySampleIndex,
                 newLikelihoodValues);
         result.isNaturalLog = isNaturalLog;
+        result.wasCoverageDownsampled = wasCoverageDownsampled;
         return result;
     }
 
