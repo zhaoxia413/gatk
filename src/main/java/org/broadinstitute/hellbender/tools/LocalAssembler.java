@@ -47,7 +47,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         pathReadsPass(kmerAdjacencySet, readPaths, gapFillCountMap);
         fillGaps(contigs, gapFillCountMap, kmerAdjacencySet);
         weldPipesAndPatchPaths(contigs, readPaths);
-        markComponents(contigs);
+        final int nComponents = markComponents(contigs);
         final List<List<Contig>> cycles = new ArrayList<>();
         markCycles(contigs, cycles);
 
@@ -56,6 +56,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         writeContigs(contigs, contigNames);
         writePaths(readPaths, contigNames);
         writeCycles(cycles, contigNames);
+        System.out.println("There are " + nComponents + " assembly graph components.");
     }
 
     private int kmerizeReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
@@ -160,39 +161,96 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void removeThinContigs( final List<ContigImpl> contigs, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-        contigs.removeIf(contig -> {
-            if ( contig.getMaxObservations() <= 2 ) {
-                final KmerAdjacency firstKmer = contig.getFirstKmer();
-                firstKmer.removeAllPredecessors();
-                final int firstKmerFinalCall = firstKmer.getFinalCall();
-                for ( final Contig predecessor : contig.getPredecessors() ) {
-                    if ( predecessor != contig && predecessor != contig.rc() ) {
-                        predecessor.getLastKmer().removeSuccessor(firstKmerFinalCall, kmerAdjacencySet);
-                        if ( !predecessor.getSuccessors().remove(contig) ) {
-                            throw new GATKException("failed to find predecessor link");
-                        }
-                    }
+    private static void removeThinContigs( final List<ContigImpl> contigs,
+                                           final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+        final Map<Contig, CutData> auxData = new HashMap<>(3 * contigs.size());
+        for ( final Contig contig : contigs ) {
+            if ( auxData.containsKey(contig) ) continue;
+            auxData.put(contig, new CutData());
+            int children = 0;
+            for ( final Contig nextContig : contig.getSuccessors() ) {
+                if ( !auxData.containsKey(nextContig) ) {
+                    findCuts(nextContig, contig, auxData);
+                    children += 1;
                 }
-
-                final KmerAdjacency lastKmer = contig.getLastKmer();
-                lastKmer.removeAllSuccessors();
-                final int lastKmerInitialCall = lastKmer.getInitialCall();
-                for ( final Contig successor : contig.getSuccessors() ) {
-                    if ( successor != contig && successor != contig.rc() ) {
-                        successor.getFirstKmer().removePredecessor(lastKmerInitialCall, kmerAdjacencySet);
-                        if ( !successor.getPredecessors().remove(contig) ) {
-                            throw new GATKException("failed to find successor link");
-                        }
-                    }
+            }
+            for ( final Contig nextContig : contig.getPredecessors() ) {
+                if ( !auxData.containsKey(nextContig) ) {
+                    findCuts(nextContig, contig, auxData);
+                    children += 1;
                 }
-
-                updateKmerContig( contig, null, 0 );
-
+            }
+            if ( children >= 2 ) {
+                contig.setCut(true);
+            }
+        }
+        contigs.removeIf( tig -> {
+            if ( tig.getMaxObservations() <= 2 && !tig.isCut() ) {
+                unlinkContig(tig, kmerAdjacencySet);
                 return true;
             }
             return false;
-        });
+        } );
+    }
+
+    private static CutData findCuts( final Contig contig, final Contig parent, final Map<Contig, CutData> auxData ) {
+        final CutData cutData = new CutData();
+        auxData.put(contig, cutData);
+        for ( final Contig nextContig : contig.getSuccessors() ) {
+            if ( nextContig == parent ) continue;
+            CutData nextCutData = auxData.get(nextContig);
+            if ( nextCutData != null ) {
+                cutData.minVisitNum = Math.min(cutData.minVisitNum, nextCutData.visitNum);
+            } else {
+                nextCutData = findCuts(nextContig, contig, auxData);
+                cutData.minVisitNum = Math.min(cutData.minVisitNum, nextCutData.minVisitNum);
+                if ( nextCutData.minVisitNum >= cutData.visitNum ) {
+                    contig.setCut(true);
+                }
+            }
+        }
+        for ( final Contig nextContig : contig.getPredecessors() ) {
+            if ( nextContig == parent ) continue;
+            CutData nextCutData = auxData.get(nextContig);
+            if ( nextCutData != null ) {
+                cutData.minVisitNum = Math.min(cutData.minVisitNum, nextCutData.visitNum);
+            } else {
+                nextCutData = findCuts(nextContig, contig, auxData);
+                cutData.minVisitNum = Math.min(cutData.minVisitNum, nextCutData.minVisitNum);
+                if ( nextCutData.minVisitNum >= cutData.visitNum ) {
+                    contig.setCut(true);
+                }
+            }
+        }
+        return cutData;
+    }
+
+    private static void unlinkContig( final Contig contig, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+        final KmerAdjacency firstKmer = contig.getFirstKmer();
+        firstKmer.removeAllPredecessors();
+        final int firstKmerFinalCall = firstKmer.getFinalCall();
+        for ( final Contig predecessor : contig.getPredecessors() ) {
+            if ( predecessor != contig && predecessor != contig.rc() ) {
+                predecessor.getLastKmer().removeSuccessor(firstKmerFinalCall, kmerAdjacencySet);
+                if ( !predecessor.getSuccessors().remove(contig) ) {
+                    throw new GATKException("failed to find predecessor link");
+                }
+            }
+        }
+
+        final KmerAdjacency lastKmer = contig.getLastKmer();
+        lastKmer.removeAllSuccessors();
+        final int lastKmerInitialCall = lastKmer.getInitialCall();
+        for ( final Contig successor : contig.getSuccessors() ) {
+            if ( successor != contig && successor != contig.rc() ) {
+                successor.getFirstKmer().removePredecessor(lastKmerInitialCall, kmerAdjacencySet);
+                if ( !successor.getPredecessors().remove(contig) ) {
+                    throw new GATKException("failed to find successor link");
+                }
+            }
+        }
+
+        updateKmerContig( contig, null, 0 );
     }
 
     private static int updateKmerContig( final Contig oldContig, final Contig newContig, final int initialOffset ) {
@@ -437,7 +495,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 */
 
-    private static void markComponents( final List<ContigImpl> contigs ) {
+    private static int markComponents( final List<ContigImpl> contigs ) {
         for ( final ContigImpl contig : contigs ) {
             contig.setComponentId(0);
         }
@@ -450,6 +508,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 markSuccessorComponents(contig.rc());
             }
         }
+        return componentId;
     }
 
     private static void markSuccessorComponents( final Contig contig ) {
@@ -1409,6 +1468,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         Contig rc();
         boolean isCyclic();
         void setCyclic( final boolean cyclic );
+        boolean isCut();
+        void setCut( final boolean cut );
         boolean isCanonical();
         ContigImpl canonical();
     }
@@ -1416,7 +1477,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
     public static final class ContigImpl implements Contig {
         //TODO: remove these IDs
         private static int nContigs;
-        private int id;
+        private final int id;
         @Override public String toString() { return Integer.toString(id); }
 
         private final CharSequence sequence;
@@ -1427,6 +1488,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         private final List<Contig> successors;
         private int componentId;
         private boolean cyclic;
+        private boolean cut;
         private final Contig rc;
 
         public ContigImpl( final CharSequence sequence, final int maxObservations,
@@ -1509,6 +1571,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public Contig rc() { return rc; }
         @Override public boolean isCyclic() { return cyclic; }
         @Override public void setCyclic( final boolean cyclic ) { this.cyclic = cyclic; }
+        @Override public boolean isCut() { return cut; }
+        @Override public void setCut( final boolean cut ) { this.cut = cut; }
         @Override public boolean isCanonical() { return true; }
         @Override public ContigImpl canonical() { return this; }
     }
@@ -1540,6 +1604,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public Contig rc() { return rc; }
         @Override public boolean isCyclic() { return rc.isCyclic(); }
         @Override public void setCyclic( final boolean cyclic ) { rc.setCyclic(cyclic); }
+        @Override public boolean isCut() { return rc.isCut(); }
+        @Override public void setCut( final boolean cut ) { rc.setCut(cut); }
         @Override public boolean isCanonical() { return false; }
         @Override public ContigImpl canonical() { return rc; }
 
@@ -1816,6 +1882,17 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 }
             }
             return sb.toString();
+        }
+    }
+
+    public static final class CutData {
+        public static int nextNum;
+        public int visitNum;
+        public int minVisitNum;
+
+        public CutData() {
+            this.visitNum = ++nextNum;
+            this.minVisitNum = visitNum;
         }
     }
 }
