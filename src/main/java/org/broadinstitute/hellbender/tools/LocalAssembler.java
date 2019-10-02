@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools;
 
 import htsjdk.samtools.util.SequenceUtil;
+import org.apache.hadoop.fs.DF;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
@@ -27,9 +28,6 @@ import java.util.function.LongFunction;
 @BetaFeature
 public class LocalAssembler extends MultiplePassReadWalker {
     public static final byte QMIN = 22;
-    private static final Integer UNVISITED = null;
-    private static final Integer VISITING = 1;
-    private static final Integer VISITED = 2;
 
     @Override public List<ReadFilter> getDefaultReadFilters() {
         return Collections.singletonList(ReadFilterLibrary.PRIMARY_LINE);
@@ -163,20 +161,24 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     private static void removeThinContigs( final List<ContigImpl> contigs,
                                            final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-        final Map<Contig, CutData> auxData = new HashMap<>(3 * contigs.size());
         for ( final Contig contig : contigs ) {
-            if ( auxData.containsKey(contig) ) continue;
-            auxData.put(contig, new CutData());
+            contig.setCut(false);
+            contig.setAuxData(null);
+        }
+
+        for ( final Contig contig : contigs ) {
+            if ( contig.getAuxData() != null ) continue;
+            contig.setAuxData(new CutData());
             int children = 0;
             for ( final Contig nextContig : contig.getSuccessors() ) {
-                if ( !auxData.containsKey(nextContig) ) {
-                    findCuts(nextContig, contig, auxData);
+                if ( nextContig.getAuxData() == null ) {
+                    findCuts(nextContig, contig);
                     children += 1;
                 }
             }
             for ( final Contig nextContig : contig.getPredecessors() ) {
-                if ( !auxData.containsKey(nextContig) ) {
-                    findCuts(nextContig, contig, auxData);
+                if ( nextContig.getAuxData() == null ) {
+                    findCuts(nextContig, contig);
                     children += 1;
                 }
             }
@@ -193,16 +195,16 @@ public class LocalAssembler extends MultiplePassReadWalker {
         } );
     }
 
-    private static CutData findCuts( final Contig contig, final Contig parent, final Map<Contig, CutData> auxData ) {
+    private static CutData findCuts( final Contig contig, final Contig parent ) {
         final CutData cutData = new CutData();
-        auxData.put(contig, cutData);
+        contig.setAuxData(cutData);
         for ( final Contig nextContig : contig.getSuccessors() ) {
             if ( nextContig == parent ) continue;
-            CutData nextCutData = auxData.get(nextContig);
+            CutData nextCutData = (CutData)nextContig.getAuxData();
             if ( nextCutData != null ) {
                 cutData.minVisitNum = Math.min(cutData.minVisitNum, nextCutData.visitNum);
             } else {
-                nextCutData = findCuts(nextContig, contig, auxData);
+                nextCutData = findCuts(nextContig, contig);
                 cutData.minVisitNum = Math.min(cutData.minVisitNum, nextCutData.minVisitNum);
                 if ( nextCutData.minVisitNum >= cutData.visitNum ) {
                     contig.setCut(true);
@@ -211,11 +213,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
         for ( final Contig nextContig : contig.getPredecessors() ) {
             if ( nextContig == parent ) continue;
-            CutData nextCutData = auxData.get(nextContig);
+            CutData nextCutData = (CutData)nextContig.getAuxData();
             if ( nextCutData != null ) {
                 cutData.minVisitNum = Math.min(cutData.minVisitNum, nextCutData.visitNum);
             } else {
-                nextCutData = findCuts(nextContig, contig, auxData);
+                nextCutData = findCuts(nextContig, contig);
                 cutData.minVisitNum = Math.min(cutData.minVisitNum, nextCutData.minVisitNum);
                 if ( nextCutData.minVisitNum >= cutData.visitNum ) {
                     contig.setCut(true);
@@ -525,35 +527,36 @@ public class LocalAssembler extends MultiplePassReadWalker {
     private static void markCycles( final List<ContigImpl> contigs, final List<List<Contig>> cycles ) {
         for ( final ContigImpl contig : contigs ) {
             contig.setCyclic(false);
+            contig.setAuxData(DFSearchStatus.UNVISITED);
+            contig.rc().setCyclic(false);
+            contig.rc().setAuxData(DFSearchStatus.UNVISITED);
         }
 
-        final Map<Contig, Integer> nodeStates = new HashMap<>(3 * contigs.size());
         final List<Contig> visiting = new ArrayList<>(contigs.size());
         for ( final ContigImpl contig : contigs ) {
-            if ( nodeStates.get(contig) == UNVISITED ) {
-                markSuccessorCycles(contig, visiting, nodeStates, cycles);
+            if ( contig.getAuxData() == DFSearchStatus.UNVISITED ) {
+                markSuccessorCycles(contig, visiting, cycles);
             }
-            if ( nodeStates.get(contig.rc()) == UNVISITED ) {
-                markSuccessorCycles(contig.rc(), visiting, nodeStates, cycles);
+            if ( contig.rc().getAuxData() == DFSearchStatus.UNVISITED ) {
+                markSuccessorCycles(contig.rc(), visiting, cycles);
             }
         }
     }
 
     private static void markSuccessorCycles( final Contig contig,
                                              final List<Contig> visiting,
-                                             final Map<Contig, Integer> nodeStates,
                                              final List<List<Contig>> cycles ) {
         visiting.add(contig);
-        nodeStates.put(contig, VISITING);
+        contig.setAuxData(DFSearchStatus.VISITING);
         for ( final Contig successor : contig.getSuccessors() ) {
-            final Integer successorState = nodeStates.get(successor);
-            if ( successorState == VISITING ) {
+            final Object successorState = successor.getAuxData();
+            if ( successorState == DFSearchStatus.VISITING ) {
                 markCycle(visiting, successor, cycles);
-            } else if ( successorState == UNVISITED ) {
-                markSuccessorCycles(successor, visiting, nodeStates, cycles);
+            } else if ( successorState == DFSearchStatus.UNVISITED ) {
+                markSuccessorCycles(successor, visiting, cycles);
             }
         }
-        nodeStates.put(contig, VISITED);
+        contig.setAuxData(DFSearchStatus.VISITED);
         visiting.remove(visiting.size() - 1);
     }
 
@@ -1442,6 +1445,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
         BOTH // k-mer occurs on 5' end of the contig and its RC (can happen when the contig is a palindrome)
     }
 
+    public enum DFSearchStatus {
+        UNVISITED,
+        VISITING,
+        VISITED
+    }
+
     public static final class ContigEndKmer extends Kmer {
         private final Contig contig;
         private final ContigOrientation contigOrientation;
@@ -1472,6 +1481,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         void setCut( final boolean cut );
         boolean isCanonical();
         ContigImpl canonical();
+        Object getAuxData();
+        void setAuxData( final Object obj );
     }
 
     public static final class ContigImpl implements Contig {
@@ -1490,6 +1501,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         private boolean cyclic;
         private boolean cut;
         private final Contig rc;
+        private Object auxData;
 
         public ContigImpl( final CharSequence sequence, final int maxObservations,
                            final Contig predecessor, final Contig successor,
@@ -1575,6 +1587,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public void setCut( final boolean cut ) { this.cut = cut; }
         @Override public boolean isCanonical() { return true; }
         @Override public ContigImpl canonical() { return this; }
+        @Override public Object getAuxData() { return auxData; }
+        @Override public void setAuxData( final Object auxData ) { this.auxData = auxData; }
     }
 
     public static final class ContigRCImpl implements Contig {
@@ -1585,6 +1599,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         private final List<Contig> predecessors;
         private final List<Contig> successors;
         private final ContigImpl rc;
+        private Object auxData;
 
         public ContigRCImpl( final ContigImpl contig ) {
             this.sequence = new SequenceRC(contig.getSequence());
@@ -1608,6 +1623,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public void setCut( final boolean cut ) { rc.setCut(cut); }
         @Override public boolean isCanonical() { return false; }
         @Override public ContigImpl canonical() { return rc; }
+        @Override public Object getAuxData() { return auxData; }
+        @Override public void setAuxData( final Object auxData ) { this.auxData = auxData; }
 
         public static final class SequenceRC implements CharSequence {
             private final int lenLess1;
@@ -1884,6 +1901,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             return sb.toString();
         }
     }
+
 
     public static final class CutData {
         public static int nextNum;
