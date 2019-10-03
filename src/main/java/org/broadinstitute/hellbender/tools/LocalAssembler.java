@@ -28,6 +28,7 @@ import java.util.function.LongFunction;
 @BetaFeature
 public class LocalAssembler extends MultiplePassReadWalker {
     public static final byte QMIN = 22;
+    public static final int MIN_THIN_OBS = 4;
 
     @Override public List<ReadFilter> getDefaultReadFilters() {
         return Collections.singletonList(ReadFilterLibrary.PRIMARY_LINE);
@@ -38,7 +39,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         final int nReads = kmerizeReadsPass(kmerAdjacencySet);
         final List<ContigImpl> contigs = buildContigs(kmerAdjacencySet);
         connectContigs(contigs);
-        removeThinContigs(contigs, kmerAdjacencySet);
+        while ( removeThinContigs(contigs, kmerAdjacencySet) ) {}
         weldPipes(contigs);
         final List<Path> readPaths = new ArrayList<>(nReads);
         final Map<GapFill, List<List<PathPart>>> gapFillCountMap = new HashMap<>();
@@ -49,11 +50,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
         final List<List<Contig>> cycles = new ArrayList<>();
         markCycles(contigs, cycles);
 
-        final Map<Contig, String> contigNames = nameContigs(contigs);
-        writeDOT(contigs, contigNames, "assembly.dot");
-        writeContigs(contigs, contigNames);
-        writePaths(readPaths, contigNames);
-        writeCycles(cycles, contigNames);
+        contigs.sort((tig1, tig2) -> Integer.compare(tig1.getId(), tig2.getId()));
+        writeDOT(contigs, "assembly.dot");
+        writeContigs(contigs);
+        writePaths(readPaths);
+        writeCycles(cycles);
         System.out.println("There are " + nComponents + " assembly graph components.");
     }
 
@@ -159,11 +160,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void removeThinContigs( final List<ContigImpl> contigs,
+    private static boolean removeThinContigs( final List<ContigImpl> contigs,
                                            final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
         for ( final Contig contig : contigs ) {
             contig.setCut(false);
             contig.setAuxData(null);
+            contig.rc().setAuxData(null);
         }
 
         for ( final Contig contig : contigs ) {
@@ -186,8 +188,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 contig.setCut(true);
             }
         }
-        contigs.removeIf( tig -> {
-            if ( tig.getMaxObservations() <= 2 && !tig.isCut() ) {
+
+        return contigs.removeIf( tig -> {
+            if ( tig.getMaxObservations() < MIN_THIN_OBS && !tig.isCut() ) {
                 unlinkContig(tig, kmerAdjacencySet);
                 return true;
             }
@@ -717,23 +720,22 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     private static void writeDOT( final List<ContigImpl> contigs,
-                                  final Map<Contig, String> contigNames,
                                   final String fileName ) {
         try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
             writer.write("digraph {\n");
             for ( final Contig contig : contigs ) {
                 final double width = contig.getSequence().length() / 100.;
-                writer.write(contigNames.get(contig) + " [width=" + width + "]\n");
-                writer.write( contigNames.get(contig.rc()) + " [width=" + width + "]\n");
+                writer.write(contig + " [width=" + width + "]\n");
+                writer.write( contig.rc() + " [width=" + width + "]\n");
             }
             for ( final Contig contig : contigs ) {
                 for ( final Contig predecessor : contig.getPredecessors() ) {
-                    final String predecessorName = contigNames.get(predecessor.rc());
-                    writer.write(contigNames.get(contig.rc()) + " -> " + predecessorName + "\n");
+                    final String predecessorName = predecessor.rc().toString();
+                    writer.write(contig.rc() + " -> " + predecessorName + "\n");
                 }
                 for ( final Contig successor : contig.getSuccessors() ) {
-                    final String successorName = contigNames.get(successor);
-                    writer.write(contigNames.get(contig) + " -> " + successorName + "\n");
+                    final String successorName = successor.toString();
+                    writer.write(contig + " -> " + successorName + "\n");
                 }
             }
             writer.write("}\n");
@@ -742,7 +744,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void writeContigs( final List<ContigImpl> contigs, final Map<Contig, String> contigNames ) {
+    private static void writeContigs( final List<ContigImpl> contigs ) {
         for ( final Contig contig : contigs ) {
             final List<Contig> predecessors = contig.getPredecessors();
             final String predecessorDescription;
@@ -754,7 +756,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 for ( final Contig predecessor : predecessors ) {
                     sb.append(prefix);
                     prefix = ',';
-                    sb.append(contigNames.get(predecessor));
+                    sb.append(predecessor);
                 }
                 predecessorDescription = sb.toString();
             }
@@ -769,12 +771,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 for ( final Contig successor : successors ) {
                     sb.append(prefix);
                     prefix = ',';
-                    sb.append(contigNames.get(successor));
+                    sb.append(successor);
                 }
                 successorDescription = sb.toString();
             }
 
-            final String contigName = contigNames.get(contig);
+            final String contigName = contig.toString();
             final String component = (contig.isCyclic() ? "(C)\t" : "\t") + contig.getComponentId();
             System.out.println(
                     contigName + component + predecessorDescription + successorDescription + "\t" +
@@ -786,11 +788,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void writePaths( final List<Path> readPaths, final Map<Contig, String> contigNames ) {
+    private static void writePaths( final List<Path> readPaths ) {
         final int nReads = readPaths.size();
         for ( int readId = 0; readId != nReads; ++readId ) {
             final Path path = readPaths.get(readId);
-            final String pathDesc = path.toString(contigNames);
+            final String pathDesc = path.toString();
             final int nErrors = path.getErrors().size();
             if ( nErrors == 0 ) {
                 System.out.println((readId + 1) + ": " + pathDesc);
@@ -800,12 +802,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void writeCycles( final List<List<Contig>> cycles, final Map<Contig, String> contigNames ) {
+    private static void writeCycles( final List<List<Contig>> cycles ) {
         for ( final List<Contig> cycle : cycles ) {
             final StringBuilder sb = new StringBuilder();
             String prefix = "Cycle: ";
             for ( final Contig contig : cycle ) {
-                sb.append(prefix).append(contigNames.get(contig));
+                sb.append(prefix).append(contig);
                 prefix = ", ";
             }
             System.out.println(sb);
@@ -1486,11 +1488,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     public static final class ContigImpl implements Contig {
-        //TODO: remove these IDs
         private static int nContigs;
         private final int id;
-        @Override public String toString() { return Integer.toString(id); }
-
         private final CharSequence sequence;
         private final int maxObservations;
         private final KmerAdjacency firstKmer;
@@ -1570,8 +1569,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             this.rc = new ContigRCImpl(this);
         }
 
-        public void setComponentId( final int id ) { this.componentId = id; }
-
+        public int getId() { return id; }
         @Override public CharSequence getSequence() { return sequence; }
         @Override public int getMaxObservations() { return maxObservations; }
         @Override public KmerAdjacency getFirstKmer() { return firstKmer; }
@@ -1579,6 +1577,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public List<Contig> getPredecessors() { return predecessors; }
         @Override public List<Contig> getSuccessors() { return successors; }
         @Override public int getComponentId() { return componentId; }
+        public void setComponentId( final int id ) { this.componentId = id; }
         @Override public int size() { return sequence.length(); }
         @Override public Contig rc() { return rc; }
         @Override public boolean isCyclic() { return cyclic; }
@@ -1589,12 +1588,10 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public ContigImpl canonical() { return this; }
         @Override public Object getAuxData() { return auxData; }
         @Override public void setAuxData( final Object auxData ) { this.auxData = auxData; }
+        @Override public String toString() { return "c" + Integer.toString(id); }
     }
 
     public static final class ContigRCImpl implements Contig {
-        //TODO: remove this
-        @Override public String toString() { return rc.toString() + "RC"; }
-
         private final CharSequence sequence;
         private final List<Contig> predecessors;
         private final List<Contig> successors;
@@ -1625,6 +1622,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public ContigImpl canonical() { return rc; }
         @Override public Object getAuxData() { return auxData; }
         @Override public void setAuxData( final Object auxData ) { this.auxData = auxData; }
+        @Override public String toString() { return rc.toString() + "RC"; }
 
         public static final class SequenceRC implements CharSequence {
             private final int lenLess1;
@@ -1876,7 +1874,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public List<Error> getErrors() { return errors; }
         public Path rc() { return new Path(this); }
 
-        public String toString( final Map<Contig, String> contigNames ) {
+        @Override public String toString() {
             if ( parts.size() == 0 ) return "";
             final StringBuilder sb = new StringBuilder();
             String prefix = "";
@@ -1889,7 +1887,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     sb.append("NoKmer(").append(pp.getLength()).append(")");
                 } else {
                     final Contig contig = pp.getContig();
-                    sb.append(contigNames.get(contig));
+                    sb.append(contig);
                     final int maxStop = contig.size() - Kmer.KSIZE + 1;
                     if ( (pp != firstPart && pp.getStart() != 0) ||
                          (pp != lastPart && pp.getStop() != maxStop) ) {
@@ -1901,7 +1899,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
             return sb.toString();
         }
     }
-
 
     public static final class CutData {
         public static int nextNum;
