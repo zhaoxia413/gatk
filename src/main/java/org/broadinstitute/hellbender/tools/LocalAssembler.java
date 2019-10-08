@@ -189,6 +189,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
             }
         }
 
+        for ( final Contig contig : contigs ) {
+            contig.setAuxData(null);
+            contig.rc().setAuxData(null);
+        }
+
         return contigs.removeIf( tig -> {
             if ( tig.getMaxObservations() < MIN_THIN_OBS && !tig.isCut() ) {
                 unlinkContig(tig, kmerAdjacencySet);
@@ -531,7 +536,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
         for ( final ContigImpl contig : contigs ) {
             contig.setCyclic(false);
             contig.setAuxData(DFSearchStatus.UNVISITED);
-            contig.rc().setCyclic(false);
             contig.rc().setAuxData(DFSearchStatus.UNVISITED);
         }
 
@@ -543,6 +547,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
             if ( contig.rc().getAuxData() == DFSearchStatus.UNVISITED ) {
                 markSuccessorCycles(contig.rc(), visiting, cycles);
             }
+        }
+
+        for ( final ContigImpl contig : contigs ) {
+            contig.setAuxData(null);
+            contig.rc().setAuxData(null);
         }
     }
 
@@ -566,11 +575,21 @@ public class LocalAssembler extends MultiplePassReadWalker {
     private static void markCycle( final List<Contig> visiting,
                                    final Contig contig,
                                    final List<List<Contig>> cycles ) {
+        //TODO: finish canonicalization
+        int minId = Integer.MAX_VALUE;
+        int minIdIdx = 0;
         for ( int idx = visiting.size() - 1; idx >= 0; --idx ) {
             final Contig cyclicContig = visiting.get(idx);
             cyclicContig.setCyclic(true);
+            if ( cyclicContig.getId() < minId ) {
+                minIdIdx = idx;
+                minId = cyclicContig.getId();
+            }
             if ( cyclicContig == contig ) {
-                cycles.add(new ArrayList<>(visiting.subList(idx, visiting.size())));
+                final List<Contig> cycleList = new ArrayList<>(visiting.size() - idx);
+                cycleList.addAll(visiting.subList(minIdIdx, visiting.size()));
+                cycleList.addAll(visiting.subList(idx, minIdIdx));
+                cycles.add(cycleList);
                 return;
             }
         }
@@ -1468,6 +1487,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     public interface Contig {
+        int getId();
         CharSequence getSequence();
         int getMaxObservations();
         KmerAdjacency getFirstKmer();
@@ -1569,7 +1589,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             this.rc = new ContigRCImpl(this);
         }
 
-        public int getId() { return id; }
+        @Override public int getId() { return id; }
         @Override public CharSequence getSequence() { return sequence; }
         @Override public int getMaxObservations() { return maxObservations; }
         @Override public KmerAdjacency getFirstKmer() { return firstKmer; }
@@ -1605,6 +1625,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             this.rc = contig;
         }
 
+        @Override public int getId() { return rc.getId(); }
         @Override public CharSequence getSequence() { return sequence; }
         @Override public int getMaxObservations() { return rc.getMaxObservations(); }
         @Override public KmerAdjacency getFirstKmer() { return rc.getLastKmer().rc(); }
