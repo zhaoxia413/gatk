@@ -27,7 +27,7 @@ import java.util.function.LongFunction;
 )
 @BetaFeature
 public class LocalAssembler extends MultiplePassReadWalker {
-    public static final byte QMIN = 22;
+    public static final byte QMIN = 25;
     public static final int MIN_THIN_OBS = 4;
 
     @Override public List<ReadFilter> getDefaultReadFilters() {
@@ -46,8 +46,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
         pathReadsPass(kmerAdjacencySet, readPaths, gapFillCountMap);
         fillGaps(contigs, gapFillCountMap, kmerAdjacencySet);
         weldPipesAndPatchPaths(contigs, readPaths);
+        readPaths.clear();
+        gapFillCountMap.clear();
+        pathReadsPass(kmerAdjacencySet, readPaths, gapFillCountMap);
         final int nComponents = markComponents(contigs);
-        final List<List<Contig>> cycles = new ArrayList<>();
+        final Set<List<Contig>> cycles = new HashSet<>();
         markCycles(contigs, cycles);
 
         contigs.sort((tig1, tig2) -> Integer.compare(tig1.getId(), tig2.getId()));
@@ -161,7 +164,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     private static boolean removeThinContigs( final List<ContigImpl> contigs,
-                                           final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+                                              final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
         for ( final Contig contig : contigs ) {
             contig.setCut(false);
             contig.setAuxData(null);
@@ -237,7 +240,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     private static void unlinkContig( final Contig contig, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
         final KmerAdjacency firstKmer = contig.getFirstKmer();
-        firstKmer.removeAllPredecessors();
         final int firstKmerFinalCall = firstKmer.getFinalCall();
         for ( final Contig predecessor : contig.getPredecessors() ) {
             if ( predecessor != contig && predecessor != contig.rc() ) {
@@ -249,7 +251,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
 
         final KmerAdjacency lastKmer = contig.getLastKmer();
-        lastKmer.removeAllSuccessors();
         final int lastKmerInitialCall = lastKmer.getInitialCall();
         for ( final Contig successor : contig.getSuccessors() ) {
             if ( successor != contig && successor != contig.rc() ) {
@@ -260,17 +261,25 @@ public class LocalAssembler extends MultiplePassReadWalker {
             }
         }
 
-        updateKmerContig( contig, null, 0 );
+        KmerAdjacency nextKmer = firstKmer;
+        KmerAdjacency kmer;
+        do {
+            kmer = nextKmer;
+            nextKmer = kmer.getSoleSuccessor();
+            kmer.clear();
+        } while ( kmer != lastKmer );
     }
 
-    private static int updateKmerContig( final Contig oldContig, final Contig newContig, final int initialOffset ) {
-        int offset = initialOffset;
-        KmerAdjacency kmer = oldContig.getFirstKmer();
-        do {
-            kmer.setContig(newContig, offset);
-            if ( newContig != null ) offset += 1;
-        } while ( (kmer = kmer.getSoleSuccessor()) != null && kmer.getContig() == oldContig );
-        return offset;
+    private static void updateKmerContig( final KmerAdjacency firstKmer, final KmerAdjacency lastKmer,
+                                         final Contig contig ) {
+        int offset = 0;
+        for ( KmerAdjacency kmer = firstKmer; kmer != lastKmer; kmer = kmer.getSoleSuccessor() ) {
+            if ( kmer == null ) {
+                throw new GATKException("contig does not have a flat pipeline of kmers");
+            }
+            kmer.setContig(contig, offset++);
+        }
+        lastKmer.setContig(contig, offset);
     }
 
     private static void weldPipes( final List<ContigImpl> contigs ) {
@@ -279,15 +288,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             if ( contig.getSuccessors().size() == 1 ) {
                 final Contig successor = contig.getSuccessors().get(0);
                 if ( successor != contig && successor != contig.rc() && successor.getPredecessors().size() == 1 ) {
-                    final ContigImpl joinedContig = join(contig, successor);
-                    final List<Contig> successors = joinedContig.getSuccessors();
-                    if ( successors.remove(successor) ) {
-                        successors.add(joinedContig);
-                    }
-                    if ( successors.remove(successor.rc()) ) {
-                        successors.add(joinedContig.rc());
-                    }
-                    contigs.set(contigId, joinedContig);
+                    contigs.set(contigId, join(contig, successor));
                     if ( !contigs.remove(successor.canonical()) ) {
                         throw new GATKException("successor linkage is messed up");
                     }
@@ -298,15 +299,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             if ( contig.getPredecessors().size() == 1 ) {
                 final Contig predecessor = contig.getPredecessors().get(0);
                 if ( predecessor != contig && predecessor != contig.rc() && predecessor.getSuccessors().size() == 1 ) {
-                    final ContigImpl joinedContig = join(predecessor, contig);
-                    final List<Contig> predecessors = joinedContig.getPredecessors();
-                    if ( predecessors.remove(predecessor) ) {
-                        predecessors.add(joinedContig);
-                    }
-                    if ( predecessors.remove(predecessor.rc()) ) {
-                        predecessors.add(joinedContig.rc());
-                    }
-                    contigs.set(contigId, joinedContig);
+                    contigs.set(contigId, join(predecessor, contig));
                     if ( !contigs.remove(predecessor.canonical()) ) {
                         throw new GATKException("predecessor linkage is messed up");
                     }
@@ -325,10 +318,23 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     final ContigImpl newContig = join(contig, successor);
                     contigs.set(contigId, newContig);
                     if ( !contigs.remove(successor.canonical()) ) {
-                        throw new GATKException("linkage is messed up");
+                        throw new GATKException("successor linkage is messed up");
                     }
                     contigId -= 1; // reconsider the new contig -- there might be more joining possible
                     patchPaths(contig, successor, newContig, readPaths);
+                    continue;
+                }
+            }
+            if ( contig.getPredecessors().size() == 1 ) {
+                final Contig predecessor = contig.getPredecessors().get(0);
+                if ( predecessor != contig && predecessor != contig.rc() && predecessor.getSuccessors().size() == 1 ) {
+                    final ContigImpl newContig = join(predecessor, contig);
+                    contigs.set(contigId, newContig);
+                    if ( !contigs.remove(predecessor.canonical()) ) {
+                        throw new GATKException("predecessor linkage is messed up");
+                    }
+                    contigId -= 1;
+                    patchPaths(predecessor, contig, newContig, readPaths);
                 }
             }
         }
@@ -336,19 +342,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     private static ContigImpl join( final Contig predecessor, final Contig successor ) {
         final ContigImpl joinedContig = new ContigImpl(predecessor, successor);
-        for ( final Contig contig : joinedContig.getPredecessors() ) {
-            if ( contig != joinedContig ) {
-                final List<Contig> successorContigs = contig.getSuccessors();
-                successorContigs.set(successorContigs.indexOf(predecessor), joinedContig);
-            }
-        }
-        for ( final Contig contig : joinedContig.getSuccessors() ) {
-            if ( contig != joinedContig ) {
-                final List<Contig> predecessorContigs = contig.getPredecessors();
-                predecessorContigs.set(predecessorContigs.indexOf(successor), joinedContig);
-            }
-        }
-        updateKmerContig(successor, joinedContig, updateKmerContig(predecessor, joinedContig, 0));
+        updateKmerContig(joinedContig.getFirstKmer(), joinedContig.getLastKmer(), joinedContig);
         return joinedContig;
     }
 
@@ -532,7 +526,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void markCycles( final List<ContigImpl> contigs, final List<List<Contig>> cycles ) {
+    private static void markCycles( final List<ContigImpl> contigs, final Set<List<Contig>> cycles ) {
         for ( final ContigImpl contig : contigs ) {
             contig.setCyclic(false);
             contig.setAuxData(DFSearchStatus.UNVISITED);
@@ -557,7 +551,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     private static void markSuccessorCycles( final Contig contig,
                                              final List<Contig> visiting,
-                                             final List<List<Contig>> cycles ) {
+                                             final Set<List<Contig>> cycles ) {
         visiting.add(contig);
         contig.setAuxData(DFSearchStatus.VISITING);
         for ( final Contig successor : contig.getSuccessors() ) {
@@ -574,11 +568,13 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     private static void markCycle( final List<Contig> visiting,
                                    final Contig contig,
-                                   final List<List<Contig>> cycles ) {
-        //TODO: finish canonicalization
+                                   final Set<List<Contig>> cycles ) {
         int minId = Integer.MAX_VALUE;
         int minIdIdx = 0;
-        for ( int idx = visiting.size() - 1; idx >= 0; --idx ) {
+        final int nVisits = visiting.size();
+        // walk backward on the visiting list to find the contig that we stumbled into a 2nd time when doing
+        // our depth-1st searching.
+        for ( int idx = nVisits - 1; idx >= 0; --idx ) {
             final Contig cyclicContig = visiting.get(idx);
             cyclicContig.setCyclic(true);
             if ( cyclicContig.getId() < minId ) {
@@ -586,9 +582,24 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 minId = cyclicContig.getId();
             }
             if ( cyclicContig == contig ) {
-                final List<Contig> cycleList = new ArrayList<>(visiting.size() - idx);
-                cycleList.addAll(visiting.subList(minIdIdx, visiting.size()));
+                // canonicalize representation of the list of contigs in the cycle by making sure that
+                // the contig with the minimum id comes first, and is in canonical representation
+                final boolean isRC = !visiting.get(minIdIdx).isCanonical();
+                if ( isRC ) {
+                    minIdIdx += 1; // this will put the contig with the minimum ID at the end, rather than the front
+                }
+                int cycleLength = nVisits - idx;
+                final List<Contig> cycleList = new ArrayList<>(cycleLength);
+                cycleList.addAll(visiting.subList(minIdIdx, nVisits));
                 cycleList.addAll(visiting.subList(idx, minIdIdx));
+                if ( isRC ) {
+                    // RC the list if the contig with minimum id was in non-canonical form
+                    for ( int cycleIdx = 0; cycleIdx <= --cycleLength; ++cycleIdx ) {
+                        final Contig tmp = cycleList.get(cycleLength);
+                        cycleList.set(cycleLength, cycleList.get(cycleIdx).rc());
+                        cycleList.set(cycleIdx, tmp.rc());
+                    }
+                }
                 cycles.add(cycleList);
                 return;
             }
@@ -687,10 +698,10 @@ public class LocalAssembler extends MultiplePassReadWalker {
             final GapFill gapFill = entry.getKey();
             final List<List<PathPart>> gapParts = entry.getValue();
             final int gapSize = gapFill.getDistance();
-            final Contig start = gapFill.getStart();
-            final Contig end = gapFill.getEnd();
             final int count = gapParts.size();
-            if ( count >= 3 && gapSize <= Kmer.KSIZE/2 ) {
+            if ( count >= 3 && gapSize < Kmer.KSIZE ) {
+                final Contig start = gapFill.getStart();
+                final Contig end = gapFill.getEnd();
                 final CharSequence seq1 = start.getSequence();
                 final int seq1Size = seq1.length();
                 final CharSequence seq2 = end.getSequence();
@@ -713,20 +724,21 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     }
                     if ( ++callCount >= Kmer.KSIZE ) {
                         nextAdjacency = KmerAdjacency.findOrAdd(kVal, kmerAdjacencySet);
-                        if ( callCount == Kmer.KSIZE ) firstAdjacency = nextAdjacency;
-                        curAdjacency.observe(prevAdjacency, nextAdjacency, count);
+                        if ( callCount != Kmer.KSIZE ) {
+                            curAdjacency.observe(prevAdjacency, nextAdjacency, count);
+                        } else {
+                            firstAdjacency = nextAdjacency;
+                            curAdjacency.observe(null, nextAdjacency, 0);
+                        }
                         prevAdjacency = curAdjacency;
                         curAdjacency = nextAdjacency;
                     }
                 }
-                curAdjacency.observe(prevAdjacency, end.getFirstKmer(), count);
+                nextAdjacency = end.getFirstKmer();
+                curAdjacency.observe(prevAdjacency, nextAdjacency, count);
+                nextAdjacency.observe(curAdjacency, null, 0);
                 final ContigImpl gapTig = new ContigImpl(sequence, count, start, end, firstAdjacency, curAdjacency);
                 contigs.add(gapTig);
-                start.getSuccessors().add(gapTig);
-                end.getPredecessors().add(gapTig);
-                final byte[] quals = new byte[sequence.length()];
-                Arrays.fill(quals, QMIN);
-                KmerAdjacencyImpl.kmerize(sequence.getBytes(), quals, QMIN, kmerAdjacencySet);
                 for ( final List<PathPart> parts : gapParts ) {
                     if ( parts.get(0).getContig() == start ) {
                         parts.set(1, new PathPart(gapTig, 0, gapSize));
@@ -821,7 +833,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void writeCycles( final List<List<Contig>> cycles ) {
+    private static void writeCycles( final Set<List<Contig>> cycles ) {
         for ( final List<Contig> cycle : cycles ) {
             final StringBuilder sb = new StringBuilder();
             String prefix = "Cycle: ";
@@ -1207,6 +1219,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public abstract int getNObservations();
         public abstract KmerAdjacency rc();
 
+        public abstract void clear();
+
         public void observe( final KmerAdjacency predecessor, final KmerAdjacency successor ) {
             observe(predecessor, successor, 1);
         }
@@ -1312,19 +1326,21 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public int getNObservations() { return rc.getNObservations(); }
         @Override public KmerAdjacency rc() { return rc; }
 
+        @Override public void clear() { rc.clear(); }
+
         @Override public void observe( final KmerAdjacency predecessor, final KmerAdjacency successor, final int count ) {
             rc.observe(successor == null ? null : successor.rc(), predecessor == null ? null : predecessor.rc(), count);
         }
     }
 
     public static final class KmerAdjacencyImpl extends KmerAdjacency {
-        private KmerAdjacency solePredecessor = null; // set to null if there are no predecessors, or multiple predecessors
-        private KmerAdjacency soleSuccessor = null; // set to null if there are no successors, or multiple successors
-        private int predecessorMask = 0; // bit mask of observed kmers preceding this one
-        private int successorMask = 0; // bit mask observed kmers following this one
-        private Contig contig = null; // the contig that contains this Kmer
+        private KmerAdjacency solePredecessor; // set to null if there are no predecessors, or multiple predecessors
+        private KmerAdjacency soleSuccessor; // set to null if there are no successors, or multiple successors
+        private int predecessorMask; // bit mask of observed kmers preceding this one
+        private int successorMask; // bit mask observed kmers following this one
+        private Contig contig; // the contig that contains this Kmer
         private int contigOffset;
-        private int nObservations = 0; // the reads in which this kmer was observed
+        private int nObservations; // the reads in which this kmer was observed
         private final KmerAdjacencyRC rc; // the reverse-complement of this kmer
         private static final int[] COUNT_FOR_MASK =
                 //side sum for binary values from 0 -> 15
@@ -1381,6 +1397,16 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
         @Override public int getNObservations() { return nObservations; }
         @Override public KmerAdjacency rc() { return rc; }
+
+        @Override public void clear() {
+            solePredecessor = null;
+            soleSuccessor = null;
+            predecessorMask = 0;
+            successorMask = 0;
+            contig = null;
+            contigOffset = 0;
+            nObservations = 0;
+        }
 
         @Override public void observe( final KmerAdjacency predecessor,
                                        final KmerAdjacency successor,
@@ -1535,6 +1561,15 @@ public class LocalAssembler extends MultiplePassReadWalker {
             this.successors = new ArrayList<>(1);
             successors.add(successor);
             this.rc = new ContigRCImpl(this);
+            KmerAdjacency kmer = firstKmer;
+            int offset = 0;
+            while ( true ) {
+                kmer.setContig(this, offset++);
+                if ( kmer == lastKmer ) break;
+                kmer = kmer.getSoleSuccessor();
+            }
+            predecessor.getSuccessors().add(this);
+            successor.getPredecessors().add(this);
         }
 
         public ContigImpl( final KmerAdjacency firstKmerAdjacency ) {
@@ -1574,6 +1609,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
         // create a new contig by joining two contigs
         public ContigImpl( final Contig predecessor, final Contig successor ) {
+            if ( predecessor == successor || predecessor == successor.rc() ) {
+                throw new GATKException("can't self-join");
+            }
             this.id = nContigs++;
             final StringBuilder sb = new StringBuilder(predecessor.getSequence());
             final CharSequence successorSequence = successor.getSequence();
@@ -1582,11 +1620,35 @@ public class LocalAssembler extends MultiplePassReadWalker {
             this.maxObservations = Math.max(predecessor.getMaxObservations(), successor.getMaxObservations());
             this.firstKmer = predecessor.getFirstKmer();
             this.lastKmer = successor.getLastKmer();
-            this.predecessors = new ArrayList<>(predecessor.getPredecessors());
-            predecessors.replaceAll( contig -> contig == successor ? this : contig );
-            this.successors = new ArrayList<>(successor.getSuccessors());
-            successors.replaceAll( contig -> contig == predecessor ? this : contig );
+            this.predecessors = new ArrayList<>(predecessor.getPredecessors().size());
+            this.successors = new ArrayList<>(successor.getSuccessors().size());
             this.rc = new ContigRCImpl(this);
+
+            // fix predecessor linkages to point to new contig
+            for ( final Contig predPredecessor : predecessor.getPredecessors() ) {
+                if ( predPredecessor == successor ) {
+                    predecessors.add(this);
+                } else if ( predPredecessor == predecessor.rc() ) {
+                    predecessors.add(rc);
+                } else {
+                    predecessors.add(predPredecessor);
+                    final List<Contig> successors = predPredecessor.getSuccessors();
+                    successors.set(successors.indexOf(predecessor), this);
+                }
+            }
+
+            // fix successor linkages to point to new contig
+            for ( final Contig succSuccessor : successor.getSuccessors() ) {
+                if ( succSuccessor == predecessor ) {
+                    successors.add(this);
+                } else if ( succSuccessor == successor.rc() ) {
+                    successors.add(rc);
+                } else {
+                    successors.add(succSuccessor);
+                    final List<Contig> predecessors = succSuccessor.getPredecessors();
+                    predecessors.set(predecessors.indexOf(successor), this);
+                }
+            }
         }
 
         @Override public int getId() { return id; }
