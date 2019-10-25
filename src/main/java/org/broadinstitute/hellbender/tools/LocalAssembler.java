@@ -1,7 +1,7 @@
 package org.broadinstitute.hellbender.tools;
 
 import htsjdk.samtools.util.SequenceUtil;
-import org.apache.hadoop.fs.DF;
+import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
@@ -10,7 +10,10 @@ import org.broadinstitute.hellbender.engine.MultiplePassReadWalker;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.tools.spark.utils.SetSizeUtils;
+import org.broadinstitute.hellbender.utils.collections.HopscotchSet;
+import org.broadinstitute.hellbender.utils.bwa.BwaMemAligner;
+import org.broadinstitute.hellbender.utils.bwa.BwaMemAlignment;
+import org.broadinstitute.hellbender.utils.bwa.BwaMemIndex;
 
 import java.io.BufferedWriter;
 import java.io.FileWriter;
@@ -30,6 +33,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
     public static final byte QMIN = 25;
     public static final int MIN_THIN_OBS = 4;
 
+    @Argument(fullName = "ref-image", doc = "The BWA memory image for the reference")
+    private String refImage;
+
     @Override public List<ReadFilter> getDefaultReadFilters() {
         return Collections.singletonList(ReadFilterLibrary.PRIMARY_LINE);
     }
@@ -37,27 +43,48 @@ public class LocalAssembler extends MultiplePassReadWalker {
     @Override public void traverseReads() {
         final KmerSet<KmerAdjacency> kmerAdjacencySet = new KmerSet<>(1000000);
         final int nReads = kmerizeReadsPass(kmerAdjacencySet);
+
         final List<ContigImpl> contigs = buildContigs(kmerAdjacencySet);
         connectContigs(contigs);
+
         while ( removeThinContigs(contigs, kmerAdjacencySet) ) {}
         weldPipes(contigs);
+
         final List<Path> readPaths = new ArrayList<>(nReads);
         final Map<GapFill, List<List<PathPart>>> gapFillCountMap = new HashMap<>();
         pathReadsPass(kmerAdjacencySet, readPaths, gapFillCountMap);
+
         fillGaps(contigs, gapFillCountMap, kmerAdjacencySet);
         weldPipesAndPatchPaths(contigs, readPaths);
         readPaths.clear();
         gapFillCountMap.clear();
         pathReadsPass(kmerAdjacencySet, readPaths, gapFillCountMap);
-        final int nComponents = markComponents(contigs);
-        final Set<List<Contig>> cycles = new HashSet<>();
-        markCycles(contigs, cycles);
 
-        contigs.sort((tig1, tig2) -> Integer.compare(tig1.getId(), tig2.getId()));
+        final int nComponents = markComponents(contigs);
+
+        final Set<Cycle> cycles = new HashSet<>();
+        findCycles(contigs, cycles);
+
+        markSNVBranches( contigs );
+
+        final Map<Contig,List<TransitPairCount>> contigTransitsMap = collectTransitPairCounts(contigs, readPaths);
+        final List<String> allTraversals = traverseAllPaths(contigs, contigTransitsMap, readPaths);
+
+        final List<List<BwaMemAlignment>> alignments;
+        final List<String> refNames;
+        try ( final BwaMemIndex bwaIndex = new BwaMemIndex(refImage) ) {
+            refNames = bwaIndex.getReferenceContigNames();
+            final BwaMemAligner aligner = new BwaMemAligner(bwaIndex);
+            aligner.setIntraCtgOptions();
+            alignments = aligner.alignSeqs(allTraversals, String::getBytes);
+        }
+
+        contigs.sort(Comparator.comparingInt(ContigImpl::getId));
         writeDOT(contigs, "assembly.dot");
         writeContigs(contigs);
         writePaths(readPaths);
         writeCycles(cycles);
+        writeAlignments(allTraversals, alignments, refNames, "assembly.sam");
         System.out.println("There are " + nComponents + " assembly graph components.");
     }
 
@@ -102,10 +129,13 @@ public class LocalAssembler extends MultiplePassReadWalker {
             final KmerAdjacency fwdKmer = contig.getFirstKmer();
             final KmerAdjacency revKmer = contig.getLastKmer().rc();
             if ( fwdKmer == revKmer ) {
-                contigEnds.findOrAdd(fwdKmer.getKVal(), kVal -> new ContigEndKmer(kVal, contig, ContigOrientation.BOTH));
+                contigEnds.findOrAdd(fwdKmer,
+                        kmer -> new ContigEndKmer(((Kmer)kmer).getKVal(), contig, ContigOrientation.BOTH));
             } else {
-                contigEnds.findOrAdd(fwdKmer.getKVal(), kVal -> new ContigEndKmer(kVal, contig, ContigOrientation.FWD));
-                contigEnds.findOrAdd(revKmer.getKVal(), kVal -> new ContigEndKmer(kVal, contig, ContigOrientation.REV));
+                contigEnds.findOrAdd(fwdKmer,
+                        kmer -> new ContigEndKmer(((Kmer)kmer).getKVal(), contig, ContigOrientation.FWD));
+                contigEnds.findOrAdd(revKmer,
+                        kmer -> new ContigEndKmer(((Kmer)kmer).getKVal(), contig, ContigOrientation.REV));
             }
         }
 
@@ -119,8 +149,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 final int mask = start.getPredecessorMask();
                 for ( int call = 0; call != 4; ++call ) {
                     if ( (mask & (1 << call)) != 0 ) {
+                        long kVal = KmerAdjacency.reverseComplement(start.getPredecessorVal(call));
                         final ContigEndKmer contigEndKmer =
-                                contigEnds.find(KmerAdjacency.reverseComplement(start.getPredecessorVal(call)));
+                                contigEnds.find(new Kmer(kVal));
                         switch ( contigEndKmer.getContigOrientation() ) {
                             case FWD:
                                 predecessors.add(contigEndKmer.getContig().rc());
@@ -144,7 +175,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 final int mask = end.getSuccessorMask();
                 for ( int call = 0; call != 4; ++call ) {
                     if ( (mask & (1 << call)) != 0 ) {
-                        final ContigEndKmer contigEndKmer = contigEnds.find(end.getSuccessorVal(call));
+                        final long kVal = end.getSuccessorVal(call);
+                        final ContigEndKmer contigEndKmer = contigEnds.find(new Kmer(kVal));
                         switch ( contigEndKmer.getContigOrientation() ) {
                             case FWD:
                                 successors.add(contigEndKmer.getContig());
@@ -526,9 +558,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void markCycles( final List<ContigImpl> contigs, final Set<List<Contig>> cycles ) {
+    private static void findCycles( final List<ContigImpl> contigs, final Set<Cycle> cycles ) {
         for ( final ContigImpl contig : contigs ) {
-            contig.setCyclic(false);
+            contig.setCycle(null);
             contig.setAuxData(DFSearchStatus.UNVISITED);
             contig.rc().setAuxData(DFSearchStatus.UNVISITED);
         }
@@ -536,10 +568,10 @@ public class LocalAssembler extends MultiplePassReadWalker {
         final List<Contig> visiting = new ArrayList<>(contigs.size());
         for ( final ContigImpl contig : contigs ) {
             if ( contig.getAuxData() == DFSearchStatus.UNVISITED ) {
-                markSuccessorCycles(contig, visiting, cycles);
+                findSuccessorCycles(contig, visiting, cycles);
             }
             if ( contig.rc().getAuxData() == DFSearchStatus.UNVISITED ) {
-                markSuccessorCycles(contig.rc(), visiting, cycles);
+                findSuccessorCycles(contig.rc(), visiting, cycles);
             }
         }
 
@@ -549,26 +581,26 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void markSuccessorCycles( final Contig contig,
+    private static void findSuccessorCycles( final Contig contig,
                                              final List<Contig> visiting,
-                                             final Set<List<Contig>> cycles ) {
+                                             final Set<Cycle> cycles ) {
         visiting.add(contig);
         contig.setAuxData(DFSearchStatus.VISITING);
         for ( final Contig successor : contig.getSuccessors() ) {
             final Object successorState = successor.getAuxData();
             if ( successorState == DFSearchStatus.VISITING ) {
-                markCycle(visiting, successor, cycles);
+                recordCycle(visiting, successor, cycles);
             } else if ( successorState == DFSearchStatus.UNVISITED ) {
-                markSuccessorCycles(successor, visiting, cycles);
+                findSuccessorCycles(successor, visiting, cycles);
             }
         }
         contig.setAuxData(DFSearchStatus.VISITED);
         visiting.remove(visiting.size() - 1);
     }
 
-    private static void markCycle( final List<Contig> visiting,
-                                   final Contig contig,
-                                   final Set<List<Contig>> cycles ) {
+    private static void recordCycle( final List<Contig> visiting,
+                                     final Contig contig,
+                                     final Set<Cycle> cycles ) {
         int minId = Integer.MAX_VALUE;
         int minIdIdx = 0;
         final int nVisits = visiting.size();
@@ -576,7 +608,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
         // our depth-1st searching.
         for ( int idx = nVisits - 1; idx >= 0; --idx ) {
             final Contig cyclicContig = visiting.get(idx);
-            cyclicContig.setCyclic(true);
             if ( cyclicContig.getId() < minId ) {
                 minIdIdx = idx;
                 minId = cyclicContig.getId();
@@ -600,66 +631,15 @@ public class LocalAssembler extends MultiplePassReadWalker {
                         cycleList.set(cycleIdx, tmp.rc());
                     }
                 }
-                cycles.add(cycleList);
+                final Cycle cycle = new Cycle(cycleList);
+                cycles.add(new Cycle(cycleList));
+                for ( final Contig tig : cycleList ) {
+                    tig.setCycle(cycle);
+                }
                 return;
             }
         }
         throw new GATKException("shouldn't be able to get here -- cycle-starting contig not found");
-    }
-
-/*
-    private static void phaseBubbles( final List<ContigImpl> contigs ) {
-        for ( final Contig contig : contigs ) {
-            final List<Contig> predecessors = contig.getPredecessors();
-            if ( predecessors.size() > 1 ) {
-                final List<Contig> successors = contig.getSuccessors();
-                if ( successors.size() > 1 ) {
-                    final List<List<Long>> predecessorsObservations = new ArrayList<>(predecessors.size());
-                    for ( final Contig predecessor : predecessors ) {
-                        predecessorsObservations.add(predecessor.getLastKmer().getObservations());
-                    }
-                    final List<List<Long>> successorsObservations = new ArrayList<>(successors.size());
-                    for ( final Contig successor : successors ) {
-                        successorsObservations.add(successor.getFirstKmer().getObservations());
-                    }
-                    System.out.print(contig);
-                    for ( final List<Long> list1 : predecessorsObservations ) {
-                        for ( final List<Long> list2 : successorsObservations ) {
-                            System.out.print('\t');
-                            System.out.print(commonCount(list1, list2));
-                        }
-                        System.out.println();
-                    }
-                }
-            }
-        }
-    }
-
-    private static int commonCount( final List<Long> list1, final List<Long> list2 ) {
-        final Iterator<Long> itr2 = list2.iterator();
-        if ( !itr2.hasNext() ) return 0;
-        long ele2 = itr2.next();
-        int result = 0;
-        for ( final long ele1 : list1 ) {
-            while ( ele2 <= ele1 ) {
-                if ( ele1 == ele2 ) result += 1;
-                if ( !itr2.hasNext() ) return result;
-                ele2 = itr2.next();
-            }
-        }
-        return result;
-    }
-*/
-
-    private static Map<Contig, String> nameContigs( final List<ContigImpl> contigs ) {
-        final Map<Contig, String> contigNames = new HashMap<>(contigs.size() * 3);
-        int id = 0;
-        for ( final ContigImpl contig : contigs ) {
-            final String contigName = "c" + ++id;
-            contigNames.put( contig, contigName);
-            contigNames.put( contig.rc(), contigName + "RC");
-        }
-        return contigNames;
     }
 
     private void pathReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet,
@@ -750,6 +730,212 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
+    private static void markSNVBranches( final List<ContigImpl> contigs ) {
+        for ( final Contig contig : contigs ) {
+            if ( contig.isSNVBranch() ) continue;
+            final List<Contig> predecessors = contig.getPredecessors();
+            final List<Contig> successors = contig.getSuccessors();
+            if ( predecessors.size() == 1 && successors.size() == 1 ) {
+                final List<Contig> predecessorSuccessors = predecessors.get(0).getSuccessors();
+                final List<Contig> successorPredecessors = successors.get(0).getPredecessors();
+                if ( predecessorSuccessors.size() == 2 && successorPredecessors.size() == 2 ) {
+                    Contig otherBranch = predecessorSuccessors.get(0);
+                    if ( otherBranch == contig ) otherBranch = predecessorSuccessors.get(1);
+                    Contig otherOtherBranch = successorPredecessors.get(0);
+                    if ( otherOtherBranch == contig ) otherOtherBranch = successorPredecessors.get(1);
+                    if ( otherBranch == otherOtherBranch &&
+                            contig.getSequence().length() == otherBranch.getSequence().length() )
+                        otherBranch.setSNVBranch(true);
+                }
+            }
+        }
+    }
+
+    private static Map<Contig,List<TransitPairCount>> collectTransitPairCounts( final List<ContigImpl> contigs,
+                                                                                final List<Path> readPaths ) {
+        final Map<Contig,List<TransitPairCount>> contigTransitsMap = new HashMap<>(3 * contigs.size());
+        for ( final Path path : readPaths ) {
+            final List<PathPart> parts = path.getParts();
+            final int nParts = parts.size();
+            for ( int partIdx = 1; partIdx < nParts - 1; ++partIdx ) {
+                final Contig prevContig = parts.get(partIdx - 1).getContig();
+                if ( prevContig == null ) continue;
+                final Contig curContig = parts.get(partIdx).getContig();
+                if ( curContig == null ) {
+                    partIdx += 1;
+                    continue;
+                }
+                final Contig nextContig = parts.get(partIdx + 1).getContig();
+                if ( nextContig == null ) {
+                    partIdx += 2;
+                    continue;
+                }
+                addTransitPair(contigTransitsMap.computeIfAbsent(curContig, tig -> new ArrayList<>(4)),
+                        prevContig,
+                        nextContig);
+                addTransitPair(contigTransitsMap.computeIfAbsent(curContig.rc(), tig -> new ArrayList<>(4)),
+                        nextContig.rc(),
+                        prevContig.rc());
+            }
+        }
+        return contigTransitsMap;
+    }
+
+    private static void addTransitPair( final List<TransitPairCount> transitPairList,
+                                        final Contig prevContig,
+                                        final Contig nextContig ) {
+        final TransitPairCount transitPair = new TransitPairCount(prevContig, nextContig);
+        int idx = transitPairList.indexOf(transitPair);
+        if ( idx == -1 ) {
+            idx = transitPairList.size();
+            transitPairList.add(transitPair);
+        }
+        transitPairList.get(idx).observe();
+    }
+
+    private static List<String> traverseAllPaths( final List<ContigImpl> contigs,
+                                                  final Map<Contig, List<TransitPairCount>> contigTransitsMap,
+                                                  final List<Path> readPaths ) {
+        for ( final Contig contig : contigs ) {
+            contig.setAuxData(null);
+        }
+
+        final List<String> allTraversals = new ArrayList<>();
+        for ( final Contig contig : contigs ) {
+            if ( contig.getAuxData() == null && contig.getPredecessors().size() == 0 ) {
+                traverseFromSource(contig, contigTransitsMap, readPaths, allTraversals);
+            }
+            if ( contig.getAuxData() == null && contig.getSuccessors().size() == 0 ) {
+                traverseFromSource(contig.rc(), contigTransitsMap, readPaths, allTraversals);
+            }
+        }
+        return allTraversals;
+    }
+
+    private static void traverseFromSource( final Contig sourceContig,
+                                            final Map<Contig, List<TransitPairCount>> contigTransitsMap,
+                                            final List<Path> readPaths,
+                                            final List<String> allTraversals ) {
+        buildTraversals(sourceContig, ""+sourceContig.getSequence().subSequence(0, Kmer.KSIZE -1),
+                null, contigTransitsMap, readPaths, allTraversals);
+    }
+
+    private static void buildTraversals( final Contig contig, final String prefix, final Contig predecessor,
+                                          final Map<Contig, List<TransitPairCount>> contigTransitsMap,
+                                          final List<Path> readPaths,
+                                          final List<String> allTraversals ) {
+        contig.setAuxData("");
+        contig.rc().setAuxData("");
+        final CharSequence contigSequence = contig.getSequence();
+        final String traversal =
+                prefix + contigSequence.subSequence(Kmer.KSIZE - 1, contigSequence.length());
+        final int nSuccessors = contig.getSuccessors().size();
+        if ( nSuccessors == 0 ) {
+            allTraversals.add(traversal);
+            return;
+        }
+
+        if ( contig.isCyclic() ) {
+            final List<List<Contig>> longestPaths = findLongestPaths(predecessor, contig, readPaths);
+            if ( longestPaths.isEmpty() ) {
+                allTraversals.add(traversal);
+                return;
+            }
+            for ( final List<Contig> path : longestPaths ) {
+                if ( path.isEmpty() ) {
+                    allTraversals.add(traversal);
+                    continue;
+                }
+                final StringBuilder extra = new StringBuilder(traversal);
+                Contig prevTig = contig;
+                for ( final Contig tig : path ) {
+                    if ( !tig.isCyclic() ) {
+                        buildTraversals(tig, extra.toString(), prevTig, contigTransitsMap, readPaths, allTraversals);
+                        prevTig = null;
+                        break;
+                    }
+                    prevTig = tig;
+                    final CharSequence tigSequence = tig.getSequence();
+                    extra.append(tigSequence.subSequence(Kmer.KSIZE - 1, tigSequence.length()));
+                }
+                if ( prevTig != null ) {
+                    allTraversals.add(extra.toString());
+                }
+            }
+            return;
+        }
+
+        final int nPredecessors = contig.getPredecessors().size();
+        final List<TransitPairCount> transits =
+                nSuccessors > 1 && nPredecessors > 1 ? contigTransitsMap.get(contig) : null;
+        for ( final Contig successor : contig.getSuccessors() ) {
+            if ( successor.isSNVBranch() ) continue;
+            if ( transits == null || transits.indexOf(new TransitPairCount(predecessor,successor)) != -1 ) {
+                buildTraversals(successor, traversal, contig, contigTransitsMap, readPaths, allTraversals);
+            }
+        }
+    }
+
+    private static List<List<Contig>> findLongestPaths( final Contig predecessor,
+                                                        final Contig successor,
+                                                        final List<Path> readPaths ) {
+        final List<List<Contig>> results = new ArrayList<>();
+        for ( final Path path : readPaths ) {
+            testPath(path, predecessor, successor, results);
+            testPath(path.rc(), predecessor, successor, results);
+        }
+        return results;
+    }
+
+    private static void testPath( final Path path,
+                                  final Contig predecessor,
+                                  final Contig successor,
+                                  final List<List<Contig>> results ) {
+        final Iterator<PathPart> partsItr = path.getParts().iterator();
+        while ( partsItr.hasNext() ) {
+            final Contig partContig = partsItr.next().getContig();
+            if ( partContig == predecessor && partsItr.hasNext() &&
+                    partsItr.next().getContig() == successor ) {
+                final List<Contig> result = grabParts(partsItr);
+                resolveResult(result, results);
+            }
+        }
+    }
+
+    private static List<Contig> grabParts( final Iterator<PathPart> partsItr ) {
+        final List<Contig> result = new ArrayList<>();
+        while ( partsItr.hasNext() ) {
+            final Contig tig = partsItr.next().getContig();
+            if ( tig == null ) break;
+            result.add(tig);
+            if ( !tig.isCyclic() ) break;
+        }
+        return result;
+    }
+
+    private static void resolveResult( final List<Contig> result, final List<List<Contig>> results ) {
+        final int nResults = results.size();
+        for ( int idx = 0; idx != nResults; ++idx ) {
+            final List<Contig> test = results.get(idx);
+            if ( isPrefix(result, test) ) return;
+            if ( isPrefix(test, result) ) {
+                results.set(idx, result);
+                return;
+            }
+        }
+        results.add(result);
+    }
+
+    private static boolean isPrefix( final List<Contig> list1, final List<Contig> list2 ) {
+        final int list1Size = list1.size();
+        final int list2Size = list2.size();
+        if ( list1Size > list2Size ) return false;
+        for ( int idx = 0; idx != list1Size; ++idx ) {
+            if ( list1.get(idx) != list2.get(idx) ) return false;
+        }
+        return true;
+    }
+
     private static void writeDOT( final List<ContigImpl> contigs,
                                   final String fileName ) {
         try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
@@ -833,15 +1019,49 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static void writeCycles( final Set<List<Contig>> cycles ) {
-        for ( final List<Contig> cycle : cycles ) {
+    private static void writeCycles( final Set<Cycle> cycles ) {
+        for ( final Cycle cycle : cycles ) {
+            final List<Contig> cycleContigs = cycle.getContigs();
             final StringBuilder sb = new StringBuilder();
             String prefix = "Cycle: ";
-            for ( final Contig contig : cycle ) {
+            for ( final Contig contig : cycleContigs ) {
                 sb.append(prefix).append(contig);
                 prefix = ", ";
             }
             System.out.println(sb);
+        }
+    }
+
+    private static void writeAlignments( final List<String> traversals,
+                                         final List<List<BwaMemAlignment>> allAlignments,
+                                         final List<String> refNames,
+                                         final String fileName ) {
+        try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
+            final int nReads = traversals.size();
+            for ( int idx = 0; idx != nReads; ++idx ) {
+                final List<BwaMemAlignment> alignments = allAlignments.get(idx);
+                final int nAlignments = alignments.size();
+                for ( int alignmentIdx = 0; alignmentIdx != nAlignments; ++alignmentIdx ) {
+                    final BwaMemAlignment alignment = alignments.get(alignmentIdx);
+                    writer.write("scaffold" + idx);
+                    writer.write('\t');
+                    writer.write(Integer.toString(alignment.getSamFlag()));
+                    writer.write('\t');
+                    final int refId = alignment.getRefId();
+                    writer.write(refId >= 0 ? refNames.get(refId) : "*");
+                    writer.write('\t');
+                    writer.write(Integer.toString(alignment.getRefStart()));
+                    writer.write('\t');
+                    writer.write(Integer.toString(alignment.getMapQual()));
+                    writer.write('\t');
+                    writer.write(alignment.getCigar());
+                    writer.write("\t*\t0\t0\t*\t*\tNM:Z:");
+                    writer.write(Integer.toString(alignment.getNMismatches()));
+                    writer.newLine();
+                }
+            }
+        } catch ( final IOException ioe ) {
+            throw new GATKException("Failed to write assembly sam file.", ioe);
         }
     }
 
@@ -863,337 +1083,22 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public static boolean isCanonical( final long val ) {
             return (val & (1L << KSIZE)) == 0L;
         }
+
+        @Override public boolean equals( final Object obj ) {
+            return obj instanceof Kmer && kVal == ((Kmer)obj).kVal;
+        }
+
+        @Override public int hashCode() {
+            return (int)(kVal ^ kVal >>> 32);
+        }
     }
 
-    public static final class KmerSet<KMER extends Kmer> implements Iterable<KMER> {
-        private int capacity;
-        private int size;
-        // unused buckets contain null.  (this data structure does not support null entries.)
-        // if the bucket is unused, the corresponding status byte is irrelevant, but is always set to 0.
-        private KMER[] buckets;
-        // format of the status bytes:
-        // high bit set indicates that the bucket contains a "chain head" (i.e., an entry that naturally belongs in the
-        // corresponding bucket).  high bit not set indicates a "squatter" (i.e., an entry that got placed here through the
-        // collision resolution methodology).  we use Byte.MIN_VALUE (i.e., 0x80) to pick off this bit.
-        // low 7 bits give the (unsigned) offset from the current entry to the next entry in the collision resolution chain.
-        // if the low 7 bits are 0, then we'd be pointing at ourselves, which is nonsense, so that particular value marks
-        // "end of chain" instead.  we use Byte.MAX_VALUE (i.e., 0x7f) to pick off these bits.
-        private byte[] status;
+    public static final class KmerSet<KMER extends Kmer> extends HopscotchSet<KMER> {
+        public KmerSet( int capacity ) { super(capacity); }
 
-        private static final double LOAD_FACTOR = .85;
-        private static final int SPREADER = 241;
-
-        public KmerSet( final int capacity ) {
-            this.capacity = computeCapacity(capacity);
-            this.size = 0;
-            this.buckets = makeBuckets(this.capacity);
-            this.status = new byte[this.capacity];
-        }
-
-        public final void clear() {
-            Arrays.fill(buckets, null);
-            Arrays.fill(status, (byte)0);
-            size = 0;
-        }
-
-        public Iterator<KMER> iterator() { return new Itr(); }
-
-        public KMER find( final long kVal ) {
-            return findOrAdd(kVal, k -> null);
-        }
-
-        public KMER findOrAdd( final long kVal, final LongFunction<KMER> producer  ) {
-            try {
-                return findOrAddInternal(kVal, producer);
-            } catch ( final HopscotchException he ) {
-                resize();
-                return findOrAddInternal(kVal, producer);
-            }
-        }
-
-        private KMER findOrAddInternal( final long kVal, final LongFunction<KMER> producer ) {
-            final int bucketIndex = bucketForKVal(kVal);
-            if ( !isChainHead(bucketIndex) ) {
-                final KMER entry = producer.apply(kVal);
-                if ( entry != null ) {
-                    insert(entry, bucketIndex);
-                }
-                return entry;
-            }
-            KMER entry = buckets[bucketIndex];
-            if ( kVal == entry.getKVal() ) {
-                return entry;
-            }
-            int offset;
-            int chainIndex = bucketIndex;
-            while ( (offset = getOffset(chainIndex)) != 0 ) {
-                chainIndex = getIndex(chainIndex, offset);
-                entry = buckets[chainIndex];
-                if ( kVal == entry.getKVal() ) {
-                    return entry;
-                }
-            }
-            entry = producer.apply(kVal);
-            if ( entry != null ) {
-                append(entry, bucketIndex, chainIndex);
-            }
-            return entry;
-        }
-
-        private void insert( final KMER entry, final int bucketIndex ) {
-            if ( buckets[bucketIndex] != null ) evict(bucketIndex);
-            buckets[bucketIndex] = entry;
-            status[bucketIndex] = Byte.MIN_VALUE;
-            size += 1;
-        }
-
-        private void append( final KMER entry, final int bucketIndex, final int endOfChainIndex ) {
-            final int offsetToEndOfChain = getIndexDiff(bucketIndex, endOfChainIndex);
-
-            // find an empty bucket for the new entry
-            int emptyBucketIndex = findEmptyBucket(bucketIndex);
-
-            // if the distance to the empty bucket is larger than this, we'll have to hopscotch
-            final int maxOffset = offsetToEndOfChain + Byte.MAX_VALUE;
-
-            // hopscotch the empty bucket into range if it's too far away
-            int offsetToEmpty;
-            while ( (offsetToEmpty = getIndexDiff(bucketIndex, emptyBucketIndex)) > maxOffset ) {
-                emptyBucketIndex = hopscotch(bucketIndex, emptyBucketIndex);
-            }
-
-            // if the new entry lies downstream of the current chain end, just link it in
-            if ( offsetToEmpty > offsetToEndOfChain ) {
-                status[endOfChainIndex] += offsetToEmpty - offsetToEndOfChain;
-            } else {
-                linkIntoChain(bucketIndex, emptyBucketIndex);
-            }
-            buckets[emptyBucketIndex] = entry;
-            size += 1;
-        }
-
-        private void evict( final int bucketToEvictIndex ) {
-            final int bucketIndex = bucketForKVal(buckets[bucketToEvictIndex].getKVal());
-            final int offsetToEvictee = getIndexDiff(bucketIndex, bucketToEvictIndex);
-            int emptyBucketIndex = findEmptyBucket(bucketIndex);
-            int fromIndex = bucketIndex;
-            while ( true ) {
-                while ( getIndexDiff(bucketIndex, emptyBucketIndex) > offsetToEvictee ) {
-                    emptyBucketIndex = hopscotch(fromIndex, emptyBucketIndex);
-                }
-                if ( emptyBucketIndex == bucketToEvictIndex ) return;
-                fromIndex = emptyBucketIndex;
-                linkIntoChain(bucketIndex, emptyBucketIndex);
-                int prevIndex = bucketIndex;
-                int offsetToNext = getOffset(prevIndex);
-                int nextIndex = getIndex(prevIndex, offsetToNext);
-                while ( (offsetToNext = getOffset(nextIndex)) != 0 ) {
-                    prevIndex = nextIndex;
-                    nextIndex = getIndex(nextIndex, offsetToNext);
-                }
-                buckets[emptyBucketIndex] = buckets[nextIndex];
-                buckets[nextIndex] = null;
-                status[nextIndex] = 0;
-                status[prevIndex] -= getOffset(prevIndex);
-                emptyBucketIndex = nextIndex;
-            }
-        }
-
-        private int bucketForKVal( final long kVal ) {
-            int bucketIndex = (int)((kVal * SPREADER) % capacity);
-            if ( bucketIndex < 0 ) {
-                bucketIndex += capacity;
-            }
-            return bucketIndex;
-        }
-
-        private int findEmptyBucket( int bucketIndex ) {
-            do {
-                bucketIndex = getIndex(bucketIndex, 1);
-            }
-            while ( buckets[bucketIndex] != null );
-            return bucketIndex;
-        }
-
-        // walk the chain until we find where the new slot gets linked in
-        private void linkIntoChain( final int bucketIndex, final int emptyBucketIndex ) {
-            int offsetToEmpty = getIndexDiff(bucketIndex, emptyBucketIndex);
-            int tmpIndex = bucketIndex;
-            int offset;
-            while ( (offset = getOffset(tmpIndex)) < offsetToEmpty ) {
-                tmpIndex = getIndex(tmpIndex, offset);
-                offsetToEmpty -= offset;
-            }
-            offset -= offsetToEmpty;
-            status[tmpIndex] -= offset;
-            status[emptyBucketIndex] = (byte) offset;
-        }
-
-        private boolean isChainHead( final int bucketIndex ) {
-            return (status[bucketIndex] & Byte.MIN_VALUE) != 0;
-        }
-
-        private int getOffset( final int bucketIndex ) {
-            return status[bucketIndex] & Byte.MAX_VALUE;
-        }
-
-        private int getIndex( final int bucketIndex, final int offset ) {
-            int result = bucketIndex + offset;
-            if ( result >= capacity ) result -= capacity;
-            else if ( result < 0 ) result += capacity;
-            return result;
-        }
-
-        // bucket1 is assumed to be upstream of bucket2 (even if bucket2's index has wrapped)
-        // i.e., the result is always positive
-        private int getIndexDiff( final int bucketIndex1, final int bucketIndex2 ) {
-            int result = bucketIndex2 - bucketIndex1;
-            if ( result < 0 ) result += capacity;
-            return result;
-        }
-
-        private int hopscotch( final int fromIndex, final int emptyBucketIndex ) {
-            final int fromToEmptyDistance = getIndexDiff(fromIndex, emptyBucketIndex);
-            int offsetToEmpty = Byte.MAX_VALUE;
-            while ( offsetToEmpty > 1 ) {
-                final int bucketIndex = getIndex(emptyBucketIndex, -offsetToEmpty);
-                final int offsetInBucket = getOffset(bucketIndex);
-                if ( offsetInBucket != 0 &&
-                        offsetInBucket < offsetToEmpty &&
-                        offsetToEmpty-offsetInBucket < fromToEmptyDistance ) {
-                    final int bucketToMoveIndex = getIndex(bucketIndex, offsetInBucket);
-                    move(bucketIndex, bucketToMoveIndex, emptyBucketIndex);
-                    return bucketToMoveIndex;
-                }
-                offsetToEmpty -= 1;
-            }
-            // this happens now and then, but is usually caught and remedied by a resize
-            throw new HopscotchException("Hopscotching failed at load factor "+(1.*size/capacity));
-        }
-
-
-        private void move( int predecessorBucketIndex, final int bucketToMoveIndex, final int emptyBucketIndex ) {
-            int toEmptyDistance = getIndexDiff(bucketToMoveIndex, emptyBucketIndex);
-            int nextOffset = getOffset(bucketToMoveIndex);
-            if ( nextOffset == 0 || nextOffset > toEmptyDistance ) {
-                status[predecessorBucketIndex] += toEmptyDistance;
-            } else {
-                status[predecessorBucketIndex] += nextOffset;
-                toEmptyDistance -= nextOffset;
-                predecessorBucketIndex = getIndex(bucketToMoveIndex, nextOffset);
-                while ( (nextOffset = getOffset(predecessorBucketIndex)) != 0 && nextOffset < toEmptyDistance ) {
-                    toEmptyDistance -= nextOffset;
-                    predecessorBucketIndex = getIndex(predecessorBucketIndex, nextOffset);
-                }
-                status[predecessorBucketIndex] = (byte) toEmptyDistance;
-            }
-            if ( nextOffset != 0 ) {
-                status[emptyBucketIndex] = (byte) (nextOffset - toEmptyDistance);
-            }
-            buckets[emptyBucketIndex] = buckets[bucketToMoveIndex];
-            buckets[bucketToMoveIndex] = null;
-            status[bucketToMoveIndex] = 0;
-        }
-
-        private void resize() {
-            final int oldCapacity = capacity;
-            final int oldSize = size;
-            final KMER[] oldBuckets = buckets;
-            final byte[] oldStatus = status;
-
-            capacity = SetSizeUtils.getLegalSizeAbove(capacity);
-            size = 0;
-            buckets = makeBuckets(capacity);
-            status = new byte[capacity];
-
-            try {
-                int idx = 0;
-                do {
-                    final KMER entry = oldBuckets[idx];
-                    if ( entry != null ) add(entry);
-                }
-                while ( (idx = (idx+127)%oldCapacity) != 0 );
-            } catch ( final IllegalStateException ise ) {
-                capacity = oldCapacity;
-                size = oldSize;
-                buckets = oldBuckets;
-                status = oldStatus;
-                // this shouldn't happen except in the case of really bad hashCode implementations
-                throw new IllegalStateException("Hopscotching failed at load factor "+1.*size/capacity+", and resizing didn't help.");
-            }
-
-            if ( size != oldSize ) {
-                // this should never happen, period.
-                throw new IllegalStateException("Lost some elements during resizing.");
-            }
-        }
-
-        private void add( final KMER entry ) {
-            final int bucketIndex = bucketForKVal(entry.getKVal());
-
-            // if there's a squatter where the new entry should go, move it elsewhere and put the entry there
-            if ( buckets[bucketIndex] != null && !isChainHead(bucketIndex) ) evict(bucketIndex);
-
-            // if the place where it should go is empty, just put the new entry there
-            if ( buckets[bucketIndex] == null ) {
-                buckets[bucketIndex] = entry;
-                status[bucketIndex] = Byte.MIN_VALUE;
-                size += 1;
-                return;
-            }
-
-            // walk to end of chain
-            // along the way, make sure the entry isn't already present if necessary
-            int endOfChainIndex = bucketIndex;
-            int offset;
-            while ( (offset = getOffset(endOfChainIndex)) != 0 ) {
-                endOfChainIndex = getIndex(endOfChainIndex, offset);
-            }
-
-            append(entry, bucketIndex, endOfChainIndex);
-        }
-
-        @SuppressWarnings("unchecked")
-        private KMER[] makeBuckets( final int size ) {
-            return (KMER[])new Kmer[size];
-        }
-
-        private static int computeCapacity( final int size ) {
-            if ( size < LOAD_FACTOR*Integer.MAX_VALUE ) {
-                final int augmentedSize = (int) (size / LOAD_FACTOR);
-                for ( final int legalSize : SetSizeUtils.legalSizes ) {
-                    if ( legalSize >= augmentedSize ) return legalSize;
-                }
-            }
-            return SetSizeUtils.legalSizes[SetSizeUtils.legalSizes.length - 1];
-        }
-
-        private static final class HopscotchException extends IllegalStateException {
-            private static final long serialVersionUID = 1L;
-            public HopscotchException( final String message ) { super(message); }
-        }
-
-        private final class Itr implements Iterator<KMER> {
-            private int bucketsIndex = -1;
-            private KMER next = null;
-
-            public Itr() { advance(); }
-
-            public boolean hasNext() { return next != null; }
-
-            public KMER next() {
-                final KMER result = next;
-                if ( result == null ) throw new NoSuchElementException("iterator is exhausted");
-                advance();
-                return result;
-            }
-
-            private void advance() {
-                next = null;
-                while ( next == null && ++bucketsIndex < buckets.length ) {
-                    next = buckets[bucketsIndex];
-                }
-            }
+        @Override
+        protected int hashToIndex( final Object kmer ) {
+            return (int)(((241 * ((Kmer)kmer).getKVal()) & Long.MAX_VALUE) % capacity());
         }
     }
 
@@ -1203,13 +1108,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public abstract KmerAdjacency getSolePredecessor();
         public abstract int getPredecessorMask();
         public abstract int getPredecessorCount();
-        public abstract void removeAllPredecessors();
         public abstract void removePredecessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet );
 
         public abstract KmerAdjacency getSoleSuccessor();
         public abstract int getSuccessorMask();
         public abstract int getSuccessorCount();
-        public abstract void removeAllSuccessors();
         public abstract void removeSuccessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet );
 
         public abstract Contig getContig();
@@ -1264,14 +1167,18 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
 
         public static KmerAdjacency find( final long kVal, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-            if ( isCanonical(kVal) ) return kmerAdjacencySet.find(kVal & KMASK);
-            final KmerAdjacency result = kmerAdjacencySet.find(reverseComplement(kVal));
+            if ( isCanonical(kVal) ) return kmerAdjacencySet.find(new Kmer(kVal & KMASK));
+            final KmerAdjacency result = kmerAdjacencySet.find(new Kmer(reverseComplement(kVal)));
             return result == null ? null : result.rc();
         }
 
         public static KmerAdjacency findOrAdd( final long kVal, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-            if ( isCanonical(kVal) ) return kmerAdjacencySet.findOrAdd(kVal & KMASK, KmerAdjacencyImpl::new);
-            return kmerAdjacencySet.findOrAdd(reverseComplement(kVal), KmerAdjacencyImpl::new).rc();
+            if ( isCanonical(kVal) ) {
+                return kmerAdjacencySet.findOrAdd(new Kmer(kVal & KMASK),
+                                                  kmer -> new KmerAdjacencyImpl(((Kmer)kmer).getKVal()));
+            }
+            return kmerAdjacencySet.findOrAdd(new Kmer(reverseComplement(kVal)),
+                                              kmer -> new KmerAdjacencyImpl(((Kmer)kmer).getKVal())).rc();
         }
     }
 
@@ -1292,7 +1199,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
         @Override public int getPredecessorMask() { return NIBREV[rc.getSuccessorMask()]; }
         @Override public int getPredecessorCount() { return rc.getSuccessorCount(); }
-        @Override public void removeAllPredecessors() { rc.removeAllSuccessors(); }
         @Override
         public void removePredecessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
             rc.removeSuccessor(3 - callToRemove, kmerAdjacencySet);
@@ -1304,7 +1210,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
         @Override public int getSuccessorMask() { return NIBREV[rc.getPredecessorMask()]; }
         @Override public int getSuccessorCount() { return rc.getPredecessorCount(); }
-        @Override public void removeAllSuccessors() { rc.removeAllPredecessors(); }
         @Override
         public void removeSuccessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
             rc.removePredecessor(3 - callToRemove, kmerAdjacencySet);
@@ -1355,7 +1260,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public KmerAdjacency getSolePredecessor() { return solePredecessor; } // may return null
         @Override public int getPredecessorMask() { return predecessorMask; }
         @Override public int getPredecessorCount() { return COUNT_FOR_MASK[predecessorMask]; }
-        @Override public void removeAllPredecessors() { predecessorMask = 0; solePredecessor = null; }
         @Override
         public void removePredecessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
             predecessorMask &= ~(1 << callToRemove);
@@ -1373,7 +1277,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public KmerAdjacency getSoleSuccessor() { return soleSuccessor; } // may return null
         @Override public int getSuccessorMask() { return successorMask; }
         @Override public int getSuccessorCount() { return COUNT_FOR_MASK[successorMask]; }
-        @Override public void removeAllSuccessors() { successorMask = 0; soleSuccessor = null; }
         @Override
         public void removeSuccessor( final int callToRemove, final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
             successorMask &= ~(1 << callToRemove);
@@ -1524,9 +1427,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
         int size();
         Contig rc();
         boolean isCyclic();
-        void setCyclic( final boolean cyclic );
+        Cycle getCycle();
+        void setCycle( final Cycle cycle );
         boolean isCut();
         void setCut( final boolean cut );
+        boolean isSNVBranch();
+        void setSNVBranch( final boolean snvBranch );
         boolean isCanonical();
         ContigImpl canonical();
         Object getAuxData();
@@ -1543,8 +1449,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
         private final List<Contig> predecessors;
         private final List<Contig> successors;
         private int componentId;
-        private boolean cyclic;
+        private Cycle cycle;
         private boolean cut;
+        private boolean snvBranch;
         private final Contig rc;
         private Object auxData;
 
@@ -1662,10 +1569,13 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public void setComponentId( final int id ) { this.componentId = id; }
         @Override public int size() { return sequence.length(); }
         @Override public Contig rc() { return rc; }
-        @Override public boolean isCyclic() { return cyclic; }
-        @Override public void setCyclic( final boolean cyclic ) { this.cyclic = cyclic; }
+        @Override public boolean isCyclic() { return cycle != null; }
+        @Override public Cycle getCycle() { return cycle; }
+        @Override public void setCycle( final Cycle cycle ) { this.cycle = cycle; }
         @Override public boolean isCut() { return cut; }
         @Override public void setCut( final boolean cut ) { this.cut = cut; }
+        @Override public boolean isSNVBranch() { return snvBranch; }
+        @Override public void setSNVBranch( final boolean snvBranch ) { this.snvBranch = snvBranch; }
         @Override public boolean isCanonical() { return true; }
         @Override public ContigImpl canonical() { return this; }
         @Override public Object getAuxData() { return auxData; }
@@ -1698,9 +1608,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public int size() { return sequence.length(); }
         @Override public Contig rc() { return rc; }
         @Override public boolean isCyclic() { return rc.isCyclic(); }
-        @Override public void setCyclic( final boolean cyclic ) { rc.setCyclic(cyclic); }
+        @Override public Cycle getCycle() { return rc.getCycle(); }
+        @Override public void setCycle( final Cycle cycle ) { rc.setCycle(cycle); }
         @Override public boolean isCut() { return rc.isCut(); }
         @Override public void setCut( final boolean cut ) { rc.setCut(cut); }
+        @Override public boolean isSNVBranch() { return rc.isSNVBranch(); }
+        @Override public void setSNVBranch( final boolean snvBranch ) { rc.setSNVBranch(snvBranch);}
         @Override public boolean isCanonical() { return false; }
         @Override public ContigImpl canonical() { return rc; }
         @Override public Object getAuxData() { return auxData; }
@@ -1729,7 +1642,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 return result;
             }
             @Override public CharSequence subSequence( final int start, final int end ) {
-                return new StringBuilder(end - start).append(this, start, end);
+                return new StringBuilder(end - start).append(this, start, end).toString();
             }
             @Override public String toString() { return new StringBuilder(this).toString(); }
         }
@@ -1983,6 +1896,26 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
+    public static final class Cycle {
+        private List<Contig> contigs;
+
+        public Cycle( final List<Contig> contigs ) {
+            this.contigs = contigs;
+        }
+
+        public List<Contig> getContigs() { return contigs; }
+
+        @Override public boolean equals( final Object obj ) {
+            if ( !(obj instanceof Cycle) ) return false;
+            final Cycle that = (Cycle)obj;
+            return contigs.equals(that.contigs);
+        }
+
+        @Override public int hashCode() {
+            return contigs.hashCode();
+        }
+    }
+
     public static final class CutData {
         public static int nextNum;
         public int visitNum;
@@ -1991,6 +1924,31 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public CutData() {
             this.visitNum = ++nextNum;
             this.minVisitNum = visitNum;
+        }
+    }
+
+    public static final class TransitPairCount {
+        private final Contig contig1;
+        private final Contig contig2;
+        private int count;
+
+        public TransitPairCount( final Contig contig1, final Contig contig2 ) {
+            this.contig1 = contig1;
+            this.contig2 = contig2;
+            this.count = 0;
+        }
+
+        public Contig getContig1() { return contig1; }
+        public Contig getContig2() { return contig2; }
+        public void observe() { count += 1; }
+
+        @Override public boolean equals( final Object obj ) {
+            if ( !(obj instanceof TransitPairCount) ) return false;
+            final TransitPairCount that = (TransitPairCount)obj;
+            return this.contig1 == that.contig1 && this.contig2 == that.contig2;
+        }
+        @Override public int hashCode() {
+            return 47 * (47 * contig1.hashCode() + contig2.hashCode());
         }
     }
 }
