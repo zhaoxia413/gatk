@@ -90,7 +90,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     private int kmerizeReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
         final int[] nReads = new int[1];
-        forEachRead( (read, ref, feature, nReadsProcessed) -> {
+        forEachRead( (read, ref, feature) -> {
             final byte[] calls = read.getBasesNoCopy();
             final byte[] quals = read.getBaseQualitiesNoCopy();
             KmerAdjacencyImpl.kmerize(calls, quals, QMIN, kmerAdjacencySet);
@@ -645,7 +645,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
     private void pathReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet,
                                 final List<Path> paths,
                                 final Map<GapFill, List<List<PathPart>>> gapFillCountMap ) {
-        forEachRead( (read, ref, feature, nReadsProcessed) -> {
+        forEachRead( (read, ref, feature) -> {
             final Path path = new Path(read.getBasesNoCopy(), read.getBaseQualitiesNoCopy(), kmerAdjacencySet);
             paths.add(path);
             final List<PathPart> parts = path.getParts();
