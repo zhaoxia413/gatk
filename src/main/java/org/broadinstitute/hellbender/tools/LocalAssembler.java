@@ -439,14 +439,18 @@ public class LocalAssembler extends MultiplePassReadWalker {
             for ( int idx = 1; idx < nParts - 1; ++idx ) {
                 final PathPart pathPart = parts.get(idx);
                 if ( pathPart.isGap() ) {
-                    final Contig start = parts.get(idx-1).getContig();
-                    final Contig end = parts.get(idx+1).getContig();
-                    if ( start.getId() <= end.getId() ) {
-                        final GapFill gapFill = new GapFill(start, end, pathPart.getSequence());
-                        gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v+1);
-                    } else {
-                        final GapFill gapFill = new GapFill(end.rc(), start.rc(), pathPart.getSequence());
-                        gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v+1);
+                    final PathPart startPart = parts.get(idx - 1);
+                    final PathPart endPart = parts.get(idx + 1);
+                    if ( startPart.stopsAtEnd() && endPart.startsAtBeginning() ) {
+                        final Contig start = startPart.getContig();
+                        final Contig end = endPart.getContig();
+                        if (start.getId() <= end.getId()) {
+                            final GapFill gapFill = new GapFill(start, end, pathPart.getSequence());
+                            gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
+                        } else {
+                            final GapFill gapFill = new GapFill(end.rc(), start.rc(), pathPart.getSequence());
+                            gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
+                        }
                     }
                 }
             }
@@ -469,8 +473,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 KmerAdjacency prevAdjacency = null;
                 KmerAdjacency curAdjacency = start.getLastKmer();
                 KmerAdjacency nextAdjacency;
-                int callCount = 0;
-                long kVal = 0;
+                long kVal = curAdjacency.getKVal();
                 for ( int idx = 0; idx != seqLen; ++idx ) {
                     kVal <<= 2;
                     switch ( sequence.charAt(idx) ) {
@@ -478,20 +481,18 @@ public class LocalAssembler extends MultiplePassReadWalker {
                         case 'G': kVal += 2; break;
                         case 'T': kVal += 3; break;
                     }
-                    if ( ++callCount >= Kmer.KSIZE ) {
-                        nextAdjacency = KmerAdjacency.findOrAdd(kVal, kmerAdjacencySet);
-                        if ( callCount != Kmer.KSIZE ) {
-                            curAdjacency.observe(prevAdjacency, nextAdjacency, count);
-                        } else {
-                            curAdjacency.observe(null, nextAdjacency, 0);
-                        }
-                        prevAdjacency = curAdjacency;
-                        curAdjacency = nextAdjacency;
-                    }
+                    nextAdjacency = KmerAdjacency.findOrAdd(kVal, kmerAdjacencySet);
+                    curAdjacency.observe(prevAdjacency, nextAdjacency, count);
+                    prevAdjacency = curAdjacency;
+                    curAdjacency = nextAdjacency;
                 }
-                nextAdjacency = end.getFirstKmer();
-                curAdjacency.observe(prevAdjacency, nextAdjacency, count);
-                nextAdjacency.observe(curAdjacency, null, 0);
+                final KmerAdjacency lastAdjacency = end.getFirstKmer();
+                if ( curAdjacency.getSuccessorVal(lastAdjacency.getFinalCall()) != lastAdjacency.getKVal() ) {
+                    curAdjacency.observe(prevAdjacency, null, count);
+                } else {
+                    curAdjacency.observe(prevAdjacency, lastAdjacency, count);
+                    lastAdjacency.observe(curAdjacency, null, 0);
+                }
             }
         }
     }
@@ -1394,11 +1395,15 @@ public class LocalAssembler extends MultiplePassReadWalker {
     public interface PathPart {
         Contig getContig();
         CharSequence getSequence();
+        void extendGap( final char call );
+        void extendPath();
         int getStart();
         int getStop();
         boolean isGap();
         int getLength();
         PathPart rc();
+        default boolean startsAtBeginning() { return getStart() == 0; }
+        default boolean stopsAtEnd() { return getStop() + Kmer.KSIZE - 1 == getContig().size(); }
     }
 
     public static final class PathPartGap implements PathPart {
@@ -1408,7 +1413,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public PathPartGap( final char call ) { this(); sequence.append(call); }
 
         @Override public Contig getContig() { return null; }
-        @Override public CharSequence getSequence() { return sequence; }
+        @Override public CharSequence getSequence() { return sequence.toString(); }
+        @Override public void extendGap( final char call ) { sequence.append(call); }
+        @Override public void extendPath() { throw new GATKException("can't extend path in a gap"); }
         @Override public int getStart() { return 0; }
         @Override public int getStop() { return sequence.length(); }
         @Override public boolean isGap() { return true; }
@@ -1418,8 +1425,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
             result.sequence.append(new ContigRCImpl.SequenceRC(sequence));
             return result;
         }
-
-        public void extendGap( final char call ) { sequence.append(call); }
     }
 
     public static final class PathPartContig implements PathPart {
@@ -1436,6 +1441,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
         @Override public Contig getContig() { return contig; }
         @Override public String getSequence() { return null; }
+        @Override public void extendGap( final char call ) { throw new GATKException("can't extend gap in a path"); }
+        @Override public void extendPath() { stop += 1; }
         @Override public int getStart() { return start; }
         @Override public int getStop() { return stop; }
         @Override public boolean isGap() { return false; }
@@ -1444,8 +1451,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
             final int revBase = contig.size() - Kmer.KSIZE + 1;
             return new PathPartContig(contig.rc(), revBase - stop, revBase - start);
         }
-
-        public void extendPath() { stop += 1; }
     }
 
     public static final class Error {
@@ -1486,9 +1491,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             return 47 * (47 * (47 * start.hashCode() + end.hashCode()) + sequence.hashCode());
         }
 
-        @Override public boolean equals( final Object obj ) {
-            return obj instanceof GapFill && equals((GapFill)obj);
-        }
+        @Override public boolean equals( final Object obj ) { return obj instanceof GapFill && equals((GapFill)obj); }
 
         public boolean equals( final GapFill that ) {
             return this.start == that.start && this.end == that.end && this.sequence.equals(that.sequence);
@@ -1545,13 +1548,13 @@ public class LocalAssembler extends MultiplePassReadWalker {
                             parts.add(currentPathPart);
                         } else if ( currentPathPart.isGap() ) {
                             // if the current path part is NoKmer, just extend it
-                            ((PathPartGap)currentPathPart).extendGap(call);
+                            currentPathPart.extendGap(call);
                         } else if ( (contigOffset = currentPathPart.getStop() + Kmer.KSIZE - 1) <
                                 (contig = currentPathPart.getContig()).size() ) {
                             // if the current path part is on some contig, note the mismatch and extend it
                             if ( errs == null ) errs = new ArrayList<>();
                             errs.add(new Error(contig, contigOffset, call, quals[idx]));
-                            ((PathPartContig)currentPathPart).extendPath();
+                            currentPathPart.extendPath();
                             kVal &= ~3;
                             switch ( contig.getSequence().charAt(contigOffset) ) {
                                 case 'C': case 'c': kVal += 1; break;
@@ -1620,7 +1623,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                         } else if ( contig == currentPathPart.getContig() ) {
                             // our lookup is on the current path part's contig -- extend it
                             if ( kmer.getContigOffset() == currentPathPart.getStop() ) {
-                                ((PathPartContig)currentPathPart).extendPath();
+                                currentPathPart.extendPath();
                             } else {
                                 // weird:  kmer is non-contiguous.  start a new path part
                                 currentPathPart = new PathPartContig(contig, kmer.getContigOffset());
