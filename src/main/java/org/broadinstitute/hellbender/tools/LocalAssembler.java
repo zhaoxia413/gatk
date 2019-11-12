@@ -310,6 +310,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
             kmer.setContig(contig, offset++);
         }
         lastKmer.setContig(contig, offset);
+        if ( offset + Kmer.KSIZE != contig.size() ) {
+            throw new GATKException("kmer chain length does not equal contig size");
+        }
     }
 
     private static void weldPipes( final List<ContigImpl> contigs ) {
@@ -340,9 +343,19 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     private static ContigImpl join( final Contig predecessor, final Contig successor ) {
+        if ( !checkOverlap(predecessor.getSequence(), successor.getSequence()) ) {
+                throw new GATKException("sequences can't be joined");
+        }
         final ContigImpl joinedContig = new ContigImpl(predecessor, successor);
         updateKmerContig(joinedContig.getFirstKmer(), joinedContig.getLastKmer(), joinedContig);
         return joinedContig;
+    }
+
+    private static boolean checkOverlap( final CharSequence seq1, final CharSequence seq2 ) {
+        final int seq1Len = seq1.length();
+        final CharSequence seq1SubSeq = seq1.subSequence(seq1Len - Kmer.KSIZE + 1, seq1Len);
+        final CharSequence seq2SubSeq = seq2.subSequence(0, Kmer.KSIZE - 1);
+        return seq1SubSeq.equals(seq2SubSeq);
     }
 
     private static int markComponents( final List<ContigImpl> contigs ) {
@@ -448,7 +461,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                             final GapFill gapFill = new GapFill(start, end, pathPart.getSequence());
                             gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
                         } else {
-                            final GapFill gapFill = new GapFill(end.rc(), start.rc(), pathPart.getSequence());
+                            final GapFill gapFill = new GapFill(end.rc(), start.rc(), pathPart.rc().getSequence());
                             gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
                         }
                     }
@@ -469,6 +482,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
             if ( count >= MIN_GAPFILL_COUNT ) {
                 final Contig start = gapFill.getStart();
                 final Contig end = gapFill.getEnd();
+                if ( sequence.length() < Kmer.KSIZE ) {
+                    if ( !checkOverlap(start.getSequence().toString()+sequence, end.getSequence().toString()) ) {
+                        continue;
+                    }
+                }
                 final int seqLen = sequence.length();
                 KmerAdjacency prevAdjacency = null;
                 KmerAdjacency curAdjacency = start.getLastKmer();
@@ -795,12 +813,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         for ( int readId = 0; readId != nReads; ++readId ) {
             final Path path = readPaths.get(readId);
             final String pathDesc = path.toString();
-            final int nErrors = path.getErrors().size();
-            if ( nErrors == 0 ) {
-                System.out.println((readId + 1) + ": " + pathDesc);
-            } else {
-                System.out.println((readId + 1) + ": " + pathDesc + " with " + nErrors + " errors");
-            }
+            System.out.println((readId + 1) + ": " + pathDesc);
         }
     }
 
@@ -1076,6 +1089,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
                                        final KmerAdjacency successor,
                                        final int count ) {
             if ( predecessor != null ) {
+                if ( predecessor.getSuccessorVal(getFinalCall()) != getKVal() ) {
+                    throw new GATKException("illegal predecessor");
+                }
                 final int initialCall = predecessor.getInitialCall();
                 final int newPredecessorMask = 1 << initialCall;
                 if ( (newPredecessorMask & predecessorMask) == 0 ) {
@@ -1089,6 +1105,9 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 }
             }
             if ( successor != null ) {
+                if ( successor.getPredecessorVal(getInitialCall()) != getKVal() ) {
+                    throw new GATKException("illegal successor");
+                }
                 final int finalCall = successor.getFinalCall();
                 final int newSuccessorMask = 1 << finalCall;
                 if ( (newSuccessorMask & successorMask) == 0 ) {
@@ -1500,24 +1519,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     public static final class Path {
         private final List<PathPart> parts;
-        private final List<Error> errors;
 
-        // RCing constructor
-        private Path( final Path that ) {
-            this.parts = new ArrayList<>();
-            final List<PathPart> thoseParts = that.parts;
-            for ( int idx = thoseParts.size() - 1; idx >= 0; --idx ) {
-                parts.add(thoseParts.get(idx).rc());
-            }
-            this.errors = that.errors;
-        }
-
-        public Path( final byte[] readCalls,
+        public Path( final byte[] calls,
                      final byte[] quals,
                      final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
             parts = new ArrayList<>();
-            List<Error> errs = null;
-            byte[] calls = readCalls;
             long kVal = 0;
             int count = 0;
             PathPart currentPathPart = null;
@@ -1528,94 +1534,27 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     case 'C': case 'c': kVal += 1; break;
                     case 'G': case 'g': kVal += 2; break;
                     case 'T': case 't': kVal += 3; break;
-                    case 'N': case 'n':
-                        if ( readCalls == calls ) {
-                            calls = Arrays.copyOf(readCalls, readCalls.length);
-                        }
-                        calls[idx] = 'A';
-                        break;
                 }
                 if ( ++count >= Kmer.KSIZE ) {
                     final KmerAdjacency kmer = KmerAdjacencyImpl.find(kVal, kmerAdjacencySet);
-                    Contig contig;
-                    final int contigOffset;
-                    // if we fail to look up the kmer (or if it's a suppressed kmer with no contig)
+                    // if we fail to look up the kmer
                     if ( kmer == null ) {
                         if ( currentPathPart == null ) {
-                            // if there's no current path part, just create the 1st one as a NoKmer path part
+                            // if there's no current path part, just create the 1st one as a PathPartGap
                             // we'll try to backtrack if we run into a good kmer
                             currentPathPart = new PathPartGap(call);
                             parts.add(currentPathPart);
                         } else if ( currentPathPart.isGap() ) {
-                            // if the current path part is NoKmer, just extend it
+                            // if the current path part is a PathPartGap, just extend it
                             currentPathPart.extendGap(call);
-                        } else if ( (contigOffset = currentPathPart.getStop() + Kmer.KSIZE - 1) <
-                                (contig = currentPathPart.getContig()).size() ) {
-                            // if the current path part is on some contig, note the mismatch and extend it
-                            if ( errs == null ) errs = new ArrayList<>();
-                            errs.add(new Error(contig, contigOffset, call, quals[idx]));
-                            currentPathPart.extendPath();
-                            kVal &= ~3;
-                            switch ( contig.getSequence().charAt(contigOffset) ) {
-                                case 'C': case 'c': kVal += 1; break;
-                                case 'G': case 'g': kVal += 2; break;
-                                case 'T': case 't': kVal += 3; break;
-                            }
-                        } else if ( contig.getSuccessors().size() == 1 ) {
-                            // at end of contig, but there's only one choice for successor contig
-                            final Contig soleSuccessor = contig.getSuccessors().get(0);
-                            if ( errs == null ) errs = new ArrayList<>();
-                            errs.add(new Error(soleSuccessor, Kmer.KSIZE - 1, call, quals[idx]));
-                            currentPathPart = new PathPartContig(soleSuccessor, 0);
-                            parts.add(currentPathPart);
-                            kVal = soleSuccessor.getFirstKmer().getKVal();
-                        } else if ( contig.getSuccessors().size() > 1 ) {
-                            int compareLen = calls.length - idx;
-                            final List<Contig> successors = contig.getSuccessors();
-                            for ( final Contig successor : successors ) {
-                                compareLen = Math.min(compareLen, successor.size() - Kmer.KSIZE + 1);
-                            }
-                            final int nSuccessors = successors.size();
-                            final int[] mismatchCounts = new int[nSuccessors];
-                            for ( int offset = 0; offset < compareLen; ++offset ) {
-                                final char readCall = Character.toUpperCase((char)calls[idx + offset]);
-                                for ( int successorId = 0; successorId != nSuccessors; ++successorId ) {
-                                    final char tigCall =
-                                            successors.get(successorId).getSequence().charAt(Kmer.KSIZE - 1 + offset);
-                                    if ( readCall != tigCall ) mismatchCounts[successorId] += 1;
-                                }
-                            }
-                            int minMismatchCount = Integer.MAX_VALUE;
-                            int minIdx = -1;
-                            for ( int successorId = 0; successorId != nSuccessors; ++successorId ) {
-                                final int mismatchCount = mismatchCounts[successorId];
-                                if ( mismatchCount < minMismatchCount ) {
-                                    minMismatchCount = mismatchCount;
-                                    minIdx = successorId;
-                                } else if ( mismatchCount == minMismatchCount ) {
-                                    minIdx = -1;
-                                }
-                            }
-                            if ( minIdx != -1 ) {
-                                final Contig successor = successors.get(minIdx);
-                                if ( errs == null ) errs = new ArrayList<>();
-                                errs.add(new Error(successor, Kmer.KSIZE - 1, call, quals[idx]));
-                                currentPathPart = new PathPartContig(successor, 0);
-                                parts.add(currentPathPart);
-                                kVal = successor.getFirstKmer().getKVal();
-                            } else {
-                                // don't know which branch is better
-                                currentPathPart = new PathPartGap(call);
-                                parts.add(currentPathPart);
-                            }
                         } else {
-                            // current path part is at the end of its contig -- create a new NoKmer path part
+                            // new PathPartGap
                             currentPathPart = new PathPartGap(call);
                             parts.add(currentPathPart);
                         }
                     } else {
                         // we've found our kmer
-                        contig = kmer.getContig();
+                        final Contig contig = kmer.getContig();
                         if ( currentPathPart == null ) {
                             // we've looked up a kmer, but don't have a current path part -- create one
                             currentPathPart = new PathPartContig(contig, kmer.getContigOffset());
@@ -1629,39 +1568,26 @@ public class LocalAssembler extends MultiplePassReadWalker {
                                 currentPathPart = new PathPartContig(contig, kmer.getContigOffset());
                                 parts.add(currentPathPart);
                             }
-                        } else if ( !currentPathPart.isGap() ) {
+                        } else {
                             // we're jumping to a new contig.  start a new path part
                             currentPathPart = new PathPartContig(contig, kmer.getContigOffset());
                             parts.add(currentPathPart);
-                        } else if ( kmer.getContigOffset() == 0 && contig.getPredecessors().size() != 1 ) {
-                            // we got our 1st good kmer lookup at the start of a contig after a chunk of NoKmers
-                            // just add a new path part for it
-                            currentPathPart = new PathPartContig(contig, 0);
-                            parts.add(currentPathPart);
-                        } else {
-                            // we got our 1st good kmer lookup after a chunk of NoKmers, and we're not at the very start
-                            // of the contig, so there's an upstream error to fix.
-                            // we don't know how to fix errors in reverse, so rc the chunk in question,
-                            // path it in the forward direction recursively, and rc that path.
-                            parts.remove( parts.size() - 1);
-                            final int end = idx + 1;
-                            final int start = end - Kmer.KSIZE - currentPathPart.getStop();
-                            final byte[] rcCalls = Arrays.copyOfRange(calls, start, end);
-                            SequenceUtil.reverseComplement(rcCalls);
-                            final byte[] rQuals = Arrays.copyOfRange(quals, start, end);
-                            SequenceUtil.reverseQualities(rQuals);
-                            final Path rcPath = new Path(rcCalls, rQuals, kmerAdjacencySet).rc();
-                            parts.addAll(rcPath.getParts());
-                            currentPathPart = parts.get(parts.size() - 1);
                         }
                     }
                 }
             }
-            this.errors = errs == null ? Collections.emptyList() : errs;
+        }
+
+        // RCing constructor
+        private Path( final Path that ) {
+            this.parts = new ArrayList<>();
+            final List<PathPart> thoseParts = that.parts;
+            for ( int idx = thoseParts.size() - 1; idx >= 0; --idx ) {
+                parts.add(thoseParts.get(idx).rc());
+            }
         }
 
         public List<PathPart> getParts() { return parts; }
-        public List<Error> getErrors() { return errors; }
         public Path rc() { return new Path(this); }
 
         @Override public String toString() {
@@ -1674,7 +1600,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 sb.append(prefix);
                 prefix = ", ";
                 if ( pp.isGap() ) {
-                    sb.append("NoKmer(").append(pp.getLength()).append(")");
+                    sb.append("NoKmer(").append(pp.getSequence()).append(")");
                 } else {
                     final Contig contig = pp.getContig();
                     sb.append(contig);
