@@ -50,16 +50,16 @@ public class LocalAssembler extends MultiplePassReadWalker {
         weldPipes(contigs);
 
         final List<Path> readPaths = new ArrayList<>(nReads);
-        final Map<GapFill, Integer> gapFillCountMap = new TreeMap<>();
-        pathReadsPass(kmerAdjacencySet, readPaths, gapFillCountMap);
+        final Map<Contig, GapFill> gapFillMap = new HashMap<>();
+        pathReadsPass(kmerAdjacencySet, readPaths, gapFillMap);
 
-        fillGaps(gapFillCountMap, kmerAdjacencySet);
+        fillGaps(gapFillMap, kmerAdjacencySet);
         contigs = buildContigs(kmerAdjacencySet);
         connectContigs(contigs);
 
         readPaths.clear();
-        gapFillCountMap.clear();
-        pathReadsPass(kmerAdjacencySet, readPaths, gapFillCountMap);
+        gapFillMap.clear();
+        pathReadsPass(kmerAdjacencySet, readPaths, gapFillMap);
 
         final int nComponents = markComponents(contigs);
 
@@ -444,7 +444,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     private void pathReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet,
                                 final List<Path> paths,
-                                final Map<GapFill, Integer> gapFillCountMap ) {
+                                final Map<Contig, GapFill> gapFillMap ) {
         forEachRead( (read, ref, feature) -> {
             final Path path = new Path(read.getBasesNoCopy(), read.getBaseQualitiesNoCopy(), kmerAdjacencySet);
             paths.add(path);
@@ -463,12 +463,14 @@ public class LocalAssembler extends MultiplePassReadWalker {
                         final int seqLen = fullSeq.length();
                         if ( start.getId() <= end.getId() ) {
                             final CharSequence subSeq = pathPart.getSequence().subSequence(Kmer.KSIZE - 1, seqLen);
-                            final GapFill gapFill = new GapFill(start, end, subSeq);
-                            gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
+                            final GapFill gapFill =
+                                    gapFillMap.computeIfAbsent(start, tig -> new GapFill(tig.getLastKmer()));
+                            gapFill.addSequence(subSeq.toString(), end.getFirstKmer());
                         } else {
                             final CharSequence subSeq = pathPart.rc().getSequence().subSequence(Kmer.KSIZE - 1, seqLen);
-                            final GapFill gapFill = new GapFill(end.rc(), start.rc(), subSeq);
-                            gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
+                            final GapFill gapFill =
+                                    gapFillMap.computeIfAbsent(end.rc(), tig -> new GapFill(tig.getLastKmer()));
+                            gapFill.addSequence(subSeq.toString(), start.rc().getFirstKmer());
                         }
                     }
                 }
@@ -481,8 +483,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     final CharSequence fullSeq = firstPart.rc().getSequence();
                     final int seqLen = fullSeq.length();
                     final CharSequence subSeq = fullSeq.subSequence(Kmer.KSIZE - 1, seqLen);
-                    final GapFill gapFill = new GapFill(contig.rc(), null, subSeq);
-                    gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
+                    final GapFill gapFill = gapFillMap.computeIfAbsent(contig.rc(), tig -> new GapFill(tig.getLastKmer()));
+                    gapFill.addSequence(subSeq.toString(), null);
                 }
             }
             final PathPart lastPart = parts.get(nParts - 1);
@@ -493,50 +495,20 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     final CharSequence fullSeq = lastPart.getSequence();
                     final int seqLen = fullSeq.length();
                     final CharSequence subSeq = fullSeq.subSequence(Kmer.KSIZE - 1, seqLen);
-                    final GapFill gapFill = new GapFill(contig, null, subSeq);
-                    gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
+                    final GapFill gapFill = gapFillMap.computeIfAbsent(contig, tig -> new GapFill(tig.getLastKmer()));
+                    gapFill.addSequence(subSeq.toString(), null);
                 }
             }
         });
     }
 
-    private static void fillGaps( final Map<GapFill, Integer> gapFillCountMap,
+    private static void fillGaps( final Map<Contig, GapFill> gapFillMap,
                                   final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
         for ( final KmerAdjacency kmer : kmerAdjacencySet ) {
             kmer.setContig(null, 0);
         }
-        for ( final Map.Entry<GapFill, Integer> entry : gapFillCountMap.entrySet() ) {
-            final GapFill gapFill = entry.getKey();
-            final int count = entry.getValue();
-            final CharSequence sequence = gapFill.getSequence();
-            if ( count >= MIN_GAPFILL_COUNT ) {
-                final Contig start = gapFill.getStart();
-                final Contig end = gapFill.getEnd();
-                final int seqLen = sequence.length();
-                KmerAdjacency prevAdjacency = null;
-                KmerAdjacency curAdjacency = start.getLastKmer();
-                KmerAdjacency nextAdjacency;
-                long kVal = curAdjacency.getKVal();
-                for ( int idx = 0; idx != seqLen; ++idx ) {
-                    kVal <<= 2;
-                    switch ( sequence.charAt(idx) ) {
-                        case 'C': kVal += 1; break;
-                        case 'G': kVal += 2; break;
-                        case 'T': kVal += 3; break;
-                    }
-                    nextAdjacency = KmerAdjacency.findOrAdd(kVal, kmerAdjacencySet);
-                    curAdjacency.observe(prevAdjacency, nextAdjacency, count);
-                    prevAdjacency = curAdjacency;
-                    curAdjacency = nextAdjacency;
-                }
-                final KmerAdjacency lastAdjacency = end == null ? null : end.getFirstKmer();
-                if ( lastAdjacency == null ) {
-                    curAdjacency.observe(prevAdjacency, null, count);
-                } else {
-                    curAdjacency.observe(prevAdjacency, lastAdjacency, count);
-                    lastAdjacency.observe(curAdjacency, null, 0);
-                }
-            }
+        for ( final GapFill gapFill : gapFillMap.values() ) {
+            gapFill.apply(kmerAdjacencySet);
         }
     }
 
@@ -1531,42 +1503,92 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public byte getQuality() { return quality; }
     }
 
-    public static final class GapFill implements Comparable<GapFill> {
-        private final Contig start;
-        private final Contig end;
-        private final String sequence;
+    public static final class GapFill {
+        final KmerAdjacency graphKmer;
+        final GapNode[] children;
 
-        public GapFill( final Contig start, final Contig end, final CharSequence sequence ) {
-            this.start = start;
-            this.end = end;
-            this.sequence = sequence.toString();
+        public GapFill( final KmerAdjacency graphKmer ) {
+            this.graphKmer = graphKmer;
+            this.children = new GapNode[4];
         }
 
-        public Contig getStart() { return start; }
-        public Contig getEnd() { return end; }
-        public CharSequence getSequence() { return sequence; }
+        public KmerAdjacency getGraphKmer() { return graphKmer; }
+        public GapNode[] getChildren() { return children; }
 
-        @Override public int hashCode() {
-            return 47 * (47 * (47 * start.hashCode() + (end == null ? 61 : end.hashCode())) + sequence.hashCode());
-        }
-
-        @Override public boolean equals( final Object obj ) { return obj instanceof GapFill && equals((GapFill)obj); }
-
-        public boolean equals( final GapFill that ) {
-            return this.start == that.start && this.end == that.end && this.sequence.equals(that.sequence);
-        }
-
-        public int compareTo( final GapFill that ) {
-            int result = Integer.compare(start.getId(), that.start.getId());
-            if ( result == 0 ) {
-                result = Integer.compare(end == null ? Integer.MAX_VALUE : end.getId(),
-                        that.end == null ? Integer.MAX_VALUE : that.end.getId());
-                if ( result == 0 ) {
-                    result = sequence.compareTo(that.sequence);
-                }
+        public void addSequence( final String sequence, final KmerAdjacency lastKmer ) {
+            final int nChars = sequence.length();
+            GapNode[] curKids = children;
+            for ( int idx = 0; idx != nChars; ++idx ) {
+                curKids = addChild(curKids, sequence.charAt(idx), false);
+                if ( curKids == null ) return;
             }
-            return result;
+            if ( lastKmer != null ) {
+                addChild(curKids, lastKmer.getFinalCall(), true);
+            }
         }
+
+        public void apply( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+/*
+            KmerAdjacency prevAdjacency = null;
+            KmerAdjacency curAdjacency = start.getLastKmer();
+            KmerAdjacency nextAdjacency;
+            long kVal = curAdjacency.getKVal();
+            for ( int idx = 0; idx != seqLen; ++idx ) {
+                kVal <<= 2;
+                switch ( sequence.charAt(idx) ) {
+                    case 'C': kVal += 1; break;
+                    case 'G': kVal += 2; break;
+                    case 'T': kVal += 3; break;
+                }
+                nextAdjacency = KmerAdjacency.findOrAdd(kVal, kmerAdjacencySet);
+                curAdjacency.observe(prevAdjacency, nextAdjacency, count);
+                prevAdjacency = curAdjacency;
+                curAdjacency = nextAdjacency;
+            }
+            final KmerAdjacency lastAdjacency = end == null ? null : end.getFirstKmer();
+            if ( lastAdjacency == null ) {
+                curAdjacency.observe(prevAdjacency, null, count);
+            } else {
+                curAdjacency.observe(prevAdjacency, lastAdjacency, count);
+                lastAdjacency.observe(curAdjacency, null, 0);
+            }
+*/
+        }
+
+        private static GapNode[] addChild( final GapNode[] children, final int callChar, final boolean onGraph ) {
+            final int call;
+            switch ( callChar ) {
+                case 'a': case 'A': call = 0; break;
+                case 'c': case 'C': call = 1; break;
+                case 'g': case 'G': call = 2; break;
+                case 't': case 'T': call = 3; break;
+                default: return null;
+            }
+            final GapNode node = children[call];
+            if ( node != null ) {
+                node.observe(onGraph);
+                return node.getChildren();
+            }
+            return (children[call] = new GapNode(onGraph)).getChildren();
+        }
+    }
+
+    public static final class GapNode {
+        int nObservations;
+        GapNode[] children;
+
+        public GapNode( final boolean onGraph ) {
+            this.nObservations = 1;
+            this.children = onGraph ? new GapNode[4] : null;
+        }
+
+        public boolean isOnGraph() { return children == null; }
+        public int getNObservations() { return nObservations; }
+        public void observe( final boolean onGraph ) {
+            this.nObservations += 1;
+            if ( onGraph ) children = null;
+        }
+        public GapNode[] getChildren() { return children; }
     }
 
     public static final class Path {
