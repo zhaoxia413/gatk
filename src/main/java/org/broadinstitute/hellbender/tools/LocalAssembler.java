@@ -50,7 +50,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         weldPipes(contigs);
 
         final List<Path> readPaths = new ArrayList<>(nReads);
-        final Map<GapFill, Integer> gapFillCountMap = new HashMap<>();
+        final Map<GapFill, Integer> gapFillCountMap = new TreeMap<>();
         pathReadsPass(kmerAdjacencySet, readPaths, gapFillCountMap);
 
         fillGaps(gapFillCountMap, kmerAdjacencySet);
@@ -65,7 +65,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
         markCycles(contigs);
 
-        markSNVBranches( contigs );
+        markSNVBranches(contigs);
 
         final Map<Contig,List<TransitPairCount>> contigTransitsMap = collectTransitPairCounts(contigs, readPaths);
         final List<Traversal> allTraversals = traverseAllPaths(contigs, contigTransitsMap, readPaths);
@@ -84,6 +84,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         writeContigs(contigs);
         writePaths(readPaths);
         writeAlignments(allTraversals, alignments, refNames, "assembly.sam");
+        writeTraversals(allTraversals, "assembly.fa");
         System.out.println("There are " + nComponents + " assembly graph components.");
     }
 
@@ -449,6 +450,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             paths.add(path);
             final List<PathPart> parts = path.getParts();
             final int nParts = parts.size();
+            if ( nParts <= 1 ) return;
             for ( int idx = 1; idx < nParts - 1; ++idx ) {
                 final PathPart pathPart = parts.get(idx);
                 if ( pathPart.isGap() ) {
@@ -457,14 +459,42 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     if ( startPart.stopsAtEnd() && endPart.startsAtBeginning() ) {
                         final Contig start = startPart.getContig();
                         final Contig end = endPart.getContig();
-                        if (start.getId() <= end.getId()) {
-                            final GapFill gapFill = new GapFill(start, end, pathPart.getSequence());
+                        final CharSequence fullSeq = pathPart.getSequence();
+                        final int seqLen = fullSeq.length();
+                        if ( start.getId() <= end.getId() ) {
+                            final CharSequence subSeq = pathPart.getSequence().subSequence(Kmer.KSIZE - 1, seqLen);
+                            final GapFill gapFill = new GapFill(start, end, subSeq);
                             gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
                         } else {
-                            final GapFill gapFill = new GapFill(end.rc(), start.rc(), pathPart.rc().getSequence());
+                            final CharSequence subSeq = pathPart.rc().getSequence().subSequence(Kmer.KSIZE - 1, seqLen);
+                            final GapFill gapFill = new GapFill(end.rc(), start.rc(), subSeq);
                             gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
                         }
                     }
+                }
+            }
+            final PathPart firstPart = parts.get(0);
+            if ( firstPart.isGap() ) {
+                final PathPart startPart = parts.get(1);
+                final Contig contig = startPart.getContig();
+                if ( startPart.startsAtBeginning() && contig.isSource() ) {
+                    final CharSequence fullSeq = firstPart.rc().getSequence();
+                    final int seqLen = fullSeq.length();
+                    final CharSequence subSeq = fullSeq.subSequence(Kmer.KSIZE - 1, seqLen);
+                    final GapFill gapFill = new GapFill(contig.rc(), null, subSeq);
+                    gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
+                }
+            }
+            final PathPart lastPart = parts.get(nParts - 1);
+            if ( lastPart.isGap() ) {
+                final PathPart endPart = parts.get(nParts - 2);
+                final Contig contig = endPart.getContig();
+                if ( endPart.stopsAtEnd() && contig.isSink() ) {
+                    final CharSequence fullSeq = lastPart.getSequence();
+                    final int seqLen = fullSeq.length();
+                    final CharSequence subSeq = fullSeq.subSequence(Kmer.KSIZE - 1, seqLen);
+                    final GapFill gapFill = new GapFill(contig, null, subSeq);
+                    gapFillCountMap.compute(gapFill, (k, v) -> v == null ? 1 : v + 1);
                 }
             }
         });
@@ -482,11 +512,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
             if ( count >= MIN_GAPFILL_COUNT ) {
                 final Contig start = gapFill.getStart();
                 final Contig end = gapFill.getEnd();
-                if ( sequence.length() < Kmer.KSIZE ) {
-                    if ( !checkOverlap(start.getSequence().toString()+sequence, end.getSequence().toString()) ) {
-                        continue;
-                    }
-                }
                 final int seqLen = sequence.length();
                 KmerAdjacency prevAdjacency = null;
                 KmerAdjacency curAdjacency = start.getLastKmer();
@@ -504,8 +529,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     prevAdjacency = curAdjacency;
                     curAdjacency = nextAdjacency;
                 }
-                final KmerAdjacency lastAdjacency = end.getFirstKmer();
-                if ( curAdjacency.getSuccessorVal(lastAdjacency.getFinalCall()) != lastAdjacency.getKVal() ) {
+                final KmerAdjacency lastAdjacency = end == null ? null : end.getFirstKmer();
+                if ( lastAdjacency == null ) {
                     curAdjacency.observe(prevAdjacency, null, count);
                 } else {
                     curAdjacency.observe(prevAdjacency, lastAdjacency, count);
@@ -817,6 +842,19 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
+    private static void writeTraversals( final List<Traversal> traversals, final String fileName ) {
+        try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
+            for ( final Traversal traversal : traversals ) {
+                writer.write(">");
+                writer.write(traversal.getName());
+                writer.newLine();
+                writer.write(traversal.getSequence());
+                writer.newLine();
+            }
+        } catch ( final IOException ioe ) {
+            throw new GATKException("Failed to write assembly sam file.", ioe);
+        }
+    }
     private static void writeAlignments( final List<Traversal> traversals,
                                          final List<List<BwaMemAlignment>> allAlignments,
                                          final List<String> refNames,
@@ -1210,6 +1248,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         ContigImpl canonical();
         CutData getCutData();
         void setCutData( final CutData cutData );
+        default boolean isSource() { return getPredecessors().size() == 0; }
+        default boolean isSink() { return getSuccessors().size() == 0; }
     }
 
     public static final class ContigImpl implements Contig {
@@ -1428,8 +1468,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
     public static final class PathPartGap implements PathPart {
         private final StringBuilder sequence;
 
-        public PathPartGap() { sequence = new StringBuilder(); }
-        public PathPartGap( final char call ) { this(); sequence.append(call); }
+        public PathPartGap( final KmerAdjacency kmer ) { this(); sequence.append(kmer.toString()); }
+        private PathPartGap() { sequence = new StringBuilder(); }
 
         @Override public Contig getContig() { return null; }
         @Override public CharSequence getSequence() { return sequence.toString(); }
@@ -1491,15 +1531,15 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public byte getQuality() { return quality; }
     }
 
-    public static final class GapFill {
+    public static final class GapFill implements Comparable<GapFill> {
         private final Contig start;
         private final Contig end;
-        private final CharSequence sequence;
+        private final String sequence;
 
         public GapFill( final Contig start, final Contig end, final CharSequence sequence ) {
             this.start = start;
             this.end = end;
-            this.sequence = sequence;
+            this.sequence = sequence.toString();
         }
 
         public Contig getStart() { return start; }
@@ -1507,13 +1547,25 @@ public class LocalAssembler extends MultiplePassReadWalker {
         public CharSequence getSequence() { return sequence; }
 
         @Override public int hashCode() {
-            return 47 * (47 * (47 * start.hashCode() + end.hashCode()) + sequence.hashCode());
+            return 47 * (47 * (47 * start.hashCode() + (end == null ? 61 : end.hashCode())) + sequence.hashCode());
         }
 
         @Override public boolean equals( final Object obj ) { return obj instanceof GapFill && equals((GapFill)obj); }
 
         public boolean equals( final GapFill that ) {
             return this.start == that.start && this.end == that.end && this.sequence.equals(that.sequence);
+        }
+
+        public int compareTo( final GapFill that ) {
+            int result = Integer.compare(start.getId(), that.start.getId());
+            if ( result == 0 ) {
+                result = Integer.compare(end == null ? Integer.MAX_VALUE : end.getId(),
+                        that.end == null ? Integer.MAX_VALUE : that.end.getId());
+                if ( result == 0 ) {
+                    result = sequence.compareTo(that.sequence);
+                }
+            }
+            return result;
         }
     }
 
@@ -1541,15 +1593,14 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     if ( kmer == null ) {
                         if ( currentPathPart == null ) {
                             // if there's no current path part, just create the 1st one as a PathPartGap
-                            // we'll try to backtrack if we run into a good kmer
-                            currentPathPart = new PathPartGap(call);
+                            currentPathPart = new PathPartGap(new KmerAdjacencyImpl(kVal));
                             parts.add(currentPathPart);
                         } else if ( currentPathPart.isGap() ) {
                             // if the current path part is a PathPartGap, just extend it
                             currentPathPart.extendGap(call);
                         } else {
                             // new PathPartGap
-                            currentPathPart = new PathPartGap(call);
+                            currentPathPart = new PathPartGap(new KmerAdjacencyImpl(kVal));
                             parts.add(currentPathPart);
                         }
                     } else {
@@ -1600,7 +1651,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 sb.append(prefix);
                 prefix = ", ";
                 if ( pp.isGap() ) {
-                    sb.append("NoKmer(").append(pp.getSequence()).append(")");
+                    sb.append("NoKmer(").append(pp.getSequence().length() - Kmer.KSIZE + 1).append(")");
                 } else {
                     final Contig contig = pp.getContig();
                     sb.append(contig);
