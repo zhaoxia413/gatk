@@ -48,6 +48,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
         while ( removeThinContigs(contigs, kmerAdjacencySet) ) {}
         weldPipes(contigs);
+        markComponents(contigs);
 
         final List<Path> readPaths = new ArrayList<>(nReads);
         final Map<Contig, GapFill> gapFillMap = new HashMap<>();
@@ -56,15 +57,13 @@ public class LocalAssembler extends MultiplePassReadWalker {
         fillGaps(gapFillMap, kmerAdjacencySet);
         contigs = buildContigs(kmerAdjacencySet);
         connectContigs(contigs);
+        final int nComponents = markComponents(contigs);
 
         readPaths.clear();
         gapFillMap.clear();
         pathReadsPass(kmerAdjacencySet, readPaths, gapFillMap);
 
-        final int nComponents = markComponents(contigs);
-
         markCycles(contigs);
-
         markSNVBranches(contigs);
 
         final Map<Contig,List<TransitPairCount>> contigTransitsMap = collectTransitPairCounts(contigs, readPaths);
@@ -1523,36 +1522,39 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 if ( curKids == null ) return;
             }
             if ( lastKmer != null ) {
-                addChild(curKids, lastKmer.getFinalCall(), true);
+                addChild(curKids, "ACGT".charAt(lastKmer.getFinalCall()), true);
             }
         }
 
         public void apply( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-/*
             KmerAdjacency prevAdjacency = null;
-            KmerAdjacency curAdjacency = start.getLastKmer();
+            KmerAdjacency curAdjacency = graphKmer;
             KmerAdjacency nextAdjacency;
             long kVal = curAdjacency.getKVal();
-            for ( int idx = 0; idx != seqLen; ++idx ) {
-                kVal <<= 2;
-                switch ( sequence.charAt(idx) ) {
-                    case 'C': kVal += 1; break;
-                    case 'G': kVal += 2; break;
-                    case 'T': kVal += 3; break;
+            GapNode[] children = this.children;
+            while ( children != null ) {
+                int call = 0;
+                int maxObs = 0;
+                GapNode maxNode = null;
+                for ( int idx = 0; idx != 4; ++idx ) {
+                    final GapNode node = children[idx];
+                    if ( node != null ) {
+                        if ( node.getNObservations() > maxObs ) {
+                            maxObs = node.getNObservations();
+                            call = idx;
+                            maxNode = node;
+                        }
+                    }
                 }
+                if ( maxObs == 0 || (curAdjacency == graphKmer && maxObs < MIN_GAPFILL_COUNT) ) break;
+                kVal = (kVal << 2) | call;
                 nextAdjacency = KmerAdjacency.findOrAdd(kVal, kmerAdjacencySet);
-                curAdjacency.observe(prevAdjacency, nextAdjacency, count);
+                curAdjacency.observe(prevAdjacency, nextAdjacency);
                 prevAdjacency = curAdjacency;
                 curAdjacency = nextAdjacency;
+                children = maxNode.getChildren();
             }
-            final KmerAdjacency lastAdjacency = end == null ? null : end.getFirstKmer();
-            if ( lastAdjacency == null ) {
-                curAdjacency.observe(prevAdjacency, null, count);
-            } else {
-                curAdjacency.observe(prevAdjacency, lastAdjacency, count);
-                lastAdjacency.observe(curAdjacency, null, 0);
-            }
-*/
+            curAdjacency.observe(prevAdjacency, null);
         }
 
         private static GapNode[] addChild( final GapNode[] children, final int callChar, final boolean onGraph ) {
@@ -1579,7 +1581,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
         public GapNode( final boolean onGraph ) {
             this.nObservations = 1;
-            this.children = onGraph ? new GapNode[4] : null;
+            this.children = onGraph ? null : new GapNode[4];
         }
 
         public boolean isOnGraph() { return children == null; }
