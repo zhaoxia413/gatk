@@ -117,6 +117,14 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 }
             }
         }
+
+        // smooth circles?
+        for ( final KmerAdjacency kmerAdjacency : kmerAdjacencySet ) {
+            if ( kmerAdjacency.getContig() == null ) {
+                contigs.add(new ContigImpl(kmerAdjacency));
+            }
+        }
+
         return contigs;
     }
 
@@ -460,15 +468,16 @@ public class LocalAssembler extends MultiplePassReadWalker {
                         final Contig end = endPart.getContig();
                         final CharSequence fullSeq = pathPart.getSequence();
                         final int seqLen = fullSeq.length();
+                        final boolean crossComponent = start.getComponentId() != end.getComponentId();
                         if ( start.getId() <= end.getId() ) {
                             final CharSequence subSeq = pathPart.getSequence().subSequence(Kmer.KSIZE - 1, seqLen);
-                            final GapFill gapFill =
-                                    gapFillMap.computeIfAbsent(start, tig -> new GapFill(tig.getLastKmer()));
+                            final GapFill gapFill = gapFillMap.computeIfAbsent(start,
+                                    tig -> new GapFill(tig.getLastKmer(), crossComponent));
                             gapFill.addSequence(subSeq.toString(), end.getFirstKmer());
                         } else {
                             final CharSequence subSeq = pathPart.rc().getSequence().subSequence(Kmer.KSIZE - 1, seqLen);
-                            final GapFill gapFill =
-                                    gapFillMap.computeIfAbsent(end.rc(), tig -> new GapFill(tig.getLastKmer()));
+                            final GapFill gapFill = gapFillMap.computeIfAbsent(end.rc(),
+                                    tig -> new GapFill(tig.getLastKmer(), crossComponent));
                             gapFill.addSequence(subSeq.toString(), start.rc().getFirstKmer());
                         }
                     }
@@ -482,7 +491,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     final CharSequence fullSeq = firstPart.rc().getSequence();
                     final int seqLen = fullSeq.length();
                     final CharSequence subSeq = fullSeq.subSequence(Kmer.KSIZE - 1, seqLen);
-                    final GapFill gapFill = gapFillMap.computeIfAbsent(contig.rc(), tig -> new GapFill(tig.getLastKmer()));
+                    final GapFill gapFill = gapFillMap.computeIfAbsent(contig.rc(),
+                            tig -> new GapFill(tig.getLastKmer(), false));
                     gapFill.addSequence(subSeq.toString(), null);
                 }
             }
@@ -494,7 +504,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     final CharSequence fullSeq = lastPart.getSequence();
                     final int seqLen = fullSeq.length();
                     final CharSequence subSeq = fullSeq.subSequence(Kmer.KSIZE - 1, seqLen);
-                    final GapFill gapFill = gapFillMap.computeIfAbsent(contig, tig -> new GapFill(tig.getLastKmer()));
+                    final GapFill gapFill = gapFillMap.computeIfAbsent(contig,
+                            tig -> new GapFill(tig.getLastKmer(), false));
                     gapFill.addSequence(subSeq.toString(), null);
                 }
             }
@@ -524,9 +535,11 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     if ( otherBranch == contig ) otherBranch = predecessorSuccessors.get(1);
                     Contig otherOtherBranch = successorPredecessors.get(0);
                     if ( otherOtherBranch == contig ) otherOtherBranch = successorPredecessors.get(1);
-                    //TODO: relax the equal size criterion, but add a not too long criterion
-                    if ( otherBranch == otherOtherBranch && contig.size() == otherBranch.size() )
+                    if ( otherBranch == otherOtherBranch &&
+                            Math.abs(contig.size() - otherBranch.size()) <= 10 &&
+                            contig.size() <= 2 * Kmer.KSIZE + 50 ) {
                         otherBranch.setSNVBranch(true);
+                    }
                 }
             }
         }
@@ -575,45 +588,31 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     private static List<Traversal> traverseAllPaths( final List<ContigImpl> contigs,
-                                                  final Map<Contig, List<TransitPairCount>> contigTransitsMap,
-                                                  final List<Path> readPaths ) {
-        for ( final Contig contig : contigs ) {
-            contig.setCutData(null);
-        }
-
-        final List<Traversal> allTraversals = new ArrayList<>();
+                                                     final Map<Contig, List<TransitPairCount>> contigTransitsMap,
+                                                     final List<Path> readPaths ) {
+        final Set<Traversal> traversalSet = new HashSet<>();
         for ( final Contig contig : contigs ) {
             if ( contig.getCutData() == null && contig.getPredecessors().size() == 0 ) {
-                traverseFromSource(contig, contigTransitsMap, readPaths, allTraversals);
+                traverseFromSource(contig, contigTransitsMap, readPaths, traversalSet);
             }
             if ( contig.getCutData() == null && contig.getSuccessors().size() == 0 ) {
-                traverseFromSource(contig.rc(), contigTransitsMap, readPaths, allTraversals);
+                traverseFromSource(contig.rc(), contigTransitsMap, readPaths, traversalSet);
             }
         }
+        final List<Traversal> allTraversals = new ArrayList<>(traversalSet.size());
+        allTraversals.addAll(traversalSet);
         return allTraversals;
     }
 
     private static void traverseFromSource( final Contig sourceContig,
                                             final Map<Contig, List<TransitPairCount>> contigTransitsMap,
                                             final List<Path> readPaths,
-                                            final List<Traversal> allTraversals ) {
-        buildTraversals(sourceContig, "",
-                ""+sourceContig.getSequence().subSequence(0, Kmer.KSIZE -1),
-                null, contigTransitsMap, readPaths, allTraversals);
-    }
-
-    private static void buildTraversals( final Contig contig, final String namePrefix, final String seqPrefix,
-                                         final Contig predecessor,
-                                         final Map<Contig, List<TransitPairCount>> contigTransitsMap,
-                                         final List<Path> readPaths,
-                                         final List<Traversal> allTraversals ) {
-        contig.setCutData(CutData.instance);
-        contig.rc().setCutData(CutData.instance);
-        final CharSequence contigSequence = contig.getSequence();
-        final String sequence = seqPrefix + contigSequence.subSequence(Kmer.KSIZE - 1, contigSequence.length());
-        final String name = namePrefix.length() == 0 ? contig.toString() : namePrefix + "+" + contig.toString();
-        final int nSuccessors = contig.getSuccessors().size();
+                                            final Set<Traversal> traversalSet ) {
+        final Traversal traversal = new Traversal();
+        traversal.addContig(sourceContig);
+        final int nSuccessors = sourceContig.getSuccessors().size();
         if ( nSuccessors == 0 ) {
+            if ( )
             allTraversals.add(new Traversal(name, sequence));
             return;
         }
@@ -666,7 +665,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
     }
 
-    private static final int getBranchCount( final List<Contig> contigs ) {
+    private static int getBranchCount( final List<Contig> contigs ) {
         int count = 0;
         for ( final Contig contig : contigs ) {
             if ( !contig.isSNVBranch() ) count += 1;
@@ -1504,14 +1503,17 @@ public class LocalAssembler extends MultiplePassReadWalker {
 
     public static final class GapFill {
         final KmerAdjacency graphKmer;
+        final boolean crossComponent;
         final GapNode[] children;
 
-        public GapFill( final KmerAdjacency graphKmer ) {
+        public GapFill( final KmerAdjacency graphKmer, final boolean crossComponent ) {
             this.graphKmer = graphKmer;
+            this.crossComponent = crossComponent;
             this.children = new GapNode[4];
         }
 
         public KmerAdjacency getGraphKmer() { return graphKmer; }
+        public boolean isCrossComponent() { return crossComponent; }
         public GapNode[] getChildren() { return children; }
 
         public void addSequence( final String sequence, final KmerAdjacency lastKmer ) {
@@ -1729,16 +1731,44 @@ public class LocalAssembler extends MultiplePassReadWalker {
     }
 
     public static final class Traversal {
-        private final String name;
-        private final String sequence;
+        private final List<Contig> contigs;
 
-        public Traversal( final String name, final String sequence ) {
-            this.name = name;
-            this.sequence = sequence;
+        public Traversal() { contigs = new ArrayList<>(); }
+        public Traversal rc() {
+            final Traversal result = new Traversal();
+            final List<Contig> thoseContigs = result.contigs;
+            thoseContigs.addAll(contigs);
+            Collections.reverse(thoseContigs);
+            thoseContigs.replaceAll(tig -> tig.rc());
+            return result;
         }
 
-        public String getName() { return name; }
-        public String getSequence() { return sequence; }
+        public void addContig( final Contig contig ) { contigs.add(contig); }
+
+        public String getName() {
+            final StringBuilder sb = new StringBuilder();
+            for ( final Contig contig : contigs ) {
+                sb.append(contig.toString());
+            }
+            return sb.toString();
+        }
+        public String getSequence() {
+            if ( contigs.size() == 0 ) return "";
+            final StringBuilder sb = new StringBuilder(contigs.get(0).getSequence().subSequence(0, Kmer.KSIZE - 1));
+            for ( final Contig contig : contigs ) {
+                final CharSequence seq = contig.getSequence();
+                sb.append(seq.subSequence(Kmer.KSIZE - 1, seq.length()));
+            }
+            return sb.toString();
+        }
+
+        @Override public int hashCode() { return contigs.hashCode(); }
+        @Override public boolean equals( final Object obj ) {
+            if ( this == obj ) return true;
+            if ( !(obj instanceof Traversal) ) return false;
+            final Traversal that = (Traversal)obj;
+            return contigs.equals(that.contigs);
+        }
     }
 
 /*
