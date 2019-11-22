@@ -591,62 +591,58 @@ public class LocalAssembler extends MultiplePassReadWalker {
                                                      final Map<Contig, List<TransitPairCount>> contigTransitsMap,
                                                      final List<Path> readPaths ) {
         final Set<Traversal> traversalSet = new HashSet<>();
+        final List<Contig> contigsList = new ArrayList<>();
         for ( final Contig contig : contigs ) {
-            if ( contig.getCutData() == null && contig.getPredecessors().size() == 0 ) {
-                traverseFromSource(contig, contigTransitsMap, readPaths, traversalSet);
-            }
-            if ( contig.getCutData() == null && contig.getSuccessors().size() == 0 ) {
-                traverseFromSource(contig.rc(), contigTransitsMap, readPaths, traversalSet);
+            if ( contig.getPredecessors().size() == 0 ) {
+                traverse(contig, null, contigsList, contigTransitsMap, readPaths, traversalSet);
+            } else if ( contig.getSuccessors().size() == 0 ) {
+                traverse(contig.rc(), null, contigsList, contigTransitsMap, readPaths, traversalSet);
             }
         }
+
+        //TODO: traverse smooth cycles
+
         final List<Traversal> allTraversals = new ArrayList<>(traversalSet.size());
         allTraversals.addAll(traversalSet);
         return allTraversals;
     }
 
-    private static void traverseFromSource( final Contig sourceContig,
-                                            final Map<Contig, List<TransitPairCount>> contigTransitsMap,
-                                            final List<Path> readPaths,
-                                            final Set<Traversal> traversalSet ) {
-        final Traversal traversal = new Traversal();
-        traversal.addContig(sourceContig);
-        final int nSuccessors = sourceContig.getSuccessors().size();
+    private static void traverse( final Contig contig,
+                                  final Contig predecessor,
+                                  final List<Contig> contigsList,
+                                  final Map<Contig, List<TransitPairCount>> contigTransitsMap,
+                                  final List<Path> readPaths,
+                                  final Set<Traversal> traversalSet ) {
+        contigsList.add(contig);
+        final int nSuccessors = contig.getSuccessors().size();
         if ( nSuccessors == 0 ) {
-            if ( )
-            allTraversals.add(new Traversal(name, sequence));
+            addTraversal(contigsList, traversalSet);
+            contigsList.remove(contigsList.size() - 1);
             return;
         }
 
         if ( contig.isCyclic() ) {
             final List<List<Contig>> longestPaths = findLongestPaths(predecessor, contig, readPaths);
             if ( longestPaths.isEmpty() ) {
-                allTraversals.add(new Traversal(name, sequence));
+                addTraversal(contigsList, traversalSet);
+                contigsList.remove(contigsList.size() - 1);
                 return;
             }
             for ( final List<Contig> path : longestPaths ) {
                 if ( path.isEmpty() ) {
-                    allTraversals.add(new Traversal(name, sequence));
+                    addTraversal(contigsList, traversalSet);
                     continue;
                 }
-                final StringBuilder seqBuilder = new StringBuilder(sequence);
-                final StringBuilder nameBuilder = new StringBuilder(name);
-                Contig prevTig = contig;
-                for ( final Contig tig : path ) {
-                    if ( !tig.isCyclic() ) {
-                        buildTraversals(tig, nameBuilder.toString(), seqBuilder.toString(), prevTig, contigTransitsMap,
-                                        readPaths, allTraversals);
-                        prevTig = null;
-                        break;
-                    }
-                    prevTig = tig;
-                    final CharSequence tigSequence = tig.getSequence();
-                    seqBuilder.append(tigSequence.subSequence(Kmer.KSIZE - 1, tigSequence.length()));
-                    nameBuilder.append('+').append(tig.toString());
-                }
-                if ( prevTig != null ) {
-                    allTraversals.add(new Traversal(nameBuilder.toString(), seqBuilder.toString()));
+                final List<Contig> cyclicList = new ArrayList<>(contigsList);
+                cyclicList.addAll(path);
+                final Contig lastContig = path.get(path.size() - 1);
+                if ( lastContig.isCyclic() ) {
+                    addTraversal(cyclicList, traversalSet);
+                } else {
+                    traverse(lastContig, null, cyclicList, contigTransitsMap, readPaths, traversalSet);
                 }
             }
+            contigsList.remove(contigsList.size() - 1);
             return;
         }
 
@@ -660,8 +656,16 @@ public class LocalAssembler extends MultiplePassReadWalker {
         for ( final Contig successor : contig.getSuccessors() ) {
             if ( successor.isSNVBranch() ) continue;
             if ( transits == null || transits.indexOf(new TransitPairCount(predecessor,successor)) != -1 ) {
-                buildTraversals(successor, name, sequence, contig, contigTransitsMap, readPaths, allTraversals);
+                traverse(successor, contig, contigsList, contigTransitsMap, readPaths, traversalSet);
             }
+        }
+        contigsList.remove(contigsList.size() - 1);
+    }
+
+    private static void addTraversal( final List<Contig> contigsList, final Set<Traversal> traversalSet ) {
+        final Traversal traversal = new Traversal(contigsList);
+        if ( !traversalSet.contains(traversal.rc()) ) {
+            traversalSet.add(traversal);
         }
     }
 
@@ -672,6 +676,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
         return count;
     }
+
     private static List<List<Contig>> findLongestPaths( final Contig predecessor,
                                                         final Contig successor,
                                                         final List<Path> readPaths ) {
@@ -1376,49 +1381,51 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public CutData getCutData() { return cutData; }
         @Override public void setCutData( final CutData cutData ) { this.cutData = cutData; }
         @Override public String toString() { return rc.toString() + "RC"; }
+    }
 
-        public static final class SequenceRC implements CharSequence {
-            private final int lenLess1;
-            private final CharSequence sequence;
+    public static final class SequenceRC implements CharSequence {
+        private final int lenLess1;
+        private final CharSequence sequence;
 
-            public SequenceRC( final CharSequence sequence ) {
-                this.lenLess1 = sequence.length() - 1;
-                this.sequence = sequence;
-            }
-
-            @Override public int length() { return sequence.length(); }
-            @Override public char charAt( final int index ) {
-                final char result;
-                switch ( sequence.charAt(lenLess1 - index) ) {
-                    case 'A': result = 'T'; break;
-                    case 'C': result = 'G'; break;
-                    case 'G': result = 'C'; break;
-                    case 'T': result = 'A'; break;
-                    default: result = 'N'; break;
-                }
-                return result;
-            }
-            @Override public CharSequence subSequence( final int start, final int end ) {
-                return new StringBuilder(end - start).append(this, start, end).toString();
-            }
-            @Override public String toString() { return new StringBuilder(this).toString(); }
+        public SequenceRC( final CharSequence sequence ) {
+            this.lenLess1 = sequence.length() - 1;
+            this.sequence = sequence;
         }
 
-        public static final class ListRC extends AbstractList<Contig> {
-            private final List<Contig> contigList;
-
-            public ListRC( final List<Contig> contigList ) {
-                this.contigList = contigList;
+        @Override public int length() { return sequence.length(); }
+        @Override public char charAt( final int index ) {
+            final char result;
+            switch ( sequence.charAt(lenLess1 - index) ) {
+                case 'A': result = 'T'; break;
+                case 'C': result = 'G'; break;
+                case 'G': result = 'C'; break;
+                case 'T': result = 'A'; break;
+                default: result = 'N'; break;
             }
-
-            @Override public Contig get( final int index ) { return contigList.get(index).rc(); }
-            @Override public int size() { return contigList.size(); }
-            @Override public Contig set( final int index, final Contig contig ) {
-                return contigList.set(index, contig.rc()).rc();
-            }
-            @Override public void add( final int index, final Contig contig ) { contigList.add(index, contig.rc()); }
-            @Override public Contig remove( final int index ) { return contigList.remove(index).rc(); }
+            return result;
         }
+        @Override public CharSequence subSequence( final int start, final int end ) {
+            return new StringBuilder(end - start).append(this, start, end).toString();
+        }
+        @Override public String toString() { return new StringBuilder(this).toString(); }
+    }
+
+    public static final class ListRC extends AbstractList<Contig> {
+        private final List<Contig> contigList;
+
+        public ListRC( final List<Contig> contigList ) {
+            this.contigList = contigList;
+        }
+
+        @Override public Contig get( final int index ) { return contigList.get(reflectIndex(index)).rc(); }
+        @Override public int size() { return contigList.size(); }
+        @Override public Contig set( final int index, final Contig contig ) {
+            return contigList.set(reflectIndex(index), contig.rc()).rc();
+        }
+        @Override public void add( final int index, final Contig contig ) { contigList.add(reflectIndex(index), contig.rc()); }
+        @Override public Contig remove( final int index ) { return contigList.remove(reflectIndex(index)).rc(); }
+
+        private int reflectIndex( final int index ) { return size() - 1 - index; }
     }
 
     public interface PathPart {
@@ -1451,7 +1458,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         @Override public int getLength() { return sequence.length(); }
         @Override public PathPart rc() {
             final PathPartGap result = new PathPartGap();
-            result.sequence.append(new ContigRCImpl.SequenceRC(sequence));
+            result.sequence.append(new SequenceRC(sequence));
             return result;
         }
     }
@@ -1733,22 +1740,18 @@ public class LocalAssembler extends MultiplePassReadWalker {
     public static final class Traversal {
         private final List<Contig> contigs;
 
-        public Traversal() { contigs = new ArrayList<>(); }
-        public Traversal rc() {
-            final Traversal result = new Traversal();
-            final List<Contig> thoseContigs = result.contigs;
-            thoseContigs.addAll(contigs);
-            Collections.reverse(thoseContigs);
-            thoseContigs.replaceAll(tig -> tig.rc());
-            return result;
+        public Traversal( final List<Contig> contigs ) {
+            this.contigs = new ArrayList<>(contigs);
         }
 
-        public void addContig( final Contig contig ) { contigs.add(contig); }
+        public Traversal rc() { return new Traversal(new ListRC(contigs)); }
 
         public String getName() {
             final StringBuilder sb = new StringBuilder();
+            String prefix = "";
             for ( final Contig contig : contigs ) {
-                sb.append(contig.toString());
+                sb.append(prefix).append(contig.toString());
+                prefix = "+";
             }
             return sb.toString();
         }
