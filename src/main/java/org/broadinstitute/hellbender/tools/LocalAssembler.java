@@ -57,6 +57,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
         fillGaps(gapFillMap, kmerAdjacencySet);
         contigs = buildContigs(kmerAdjacencySet);
         connectContigs(contigs);
+        removeThinContigs(contigs, kmerAdjacencySet);
+        weldPipes(contigs);
         final int nComponents = markComponents(contigs);
 
         readPaths.clear();
@@ -600,7 +602,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
             }
         }
 
-        //TODO: traverse smooth cycles
+        // TODO: don't trace indefinitely far through palindromes -- figure out max wraparound
+        // TODO: traverse smooth cycles
 
         final List<Traversal> allTraversals = new ArrayList<>(traversalSet.size());
         allTraversals.addAll(traversalSet);
@@ -1541,6 +1544,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
             KmerAdjacency nextAdjacency;
             long kVal = curAdjacency.getKVal();
             GapNode[] children = this.children;
+            int lastObs = 1;
             while ( children != null ) {
                 int call = 0;
                 int maxObs = 0;
@@ -1558,7 +1562,8 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 if ( maxObs == 0 || (curAdjacency == graphKmer && maxObs < MIN_GAPFILL_COUNT) ) break;
                 kVal = (kVal << 2) | call;
                 nextAdjacency = KmerAdjacency.findOrAdd(kVal, kmerAdjacencySet);
-                curAdjacency.observe(prevAdjacency, nextAdjacency);
+                curAdjacency.observe(prevAdjacency, nextAdjacency, lastObs);
+                lastObs = maxObs;
                 prevAdjacency = curAdjacency;
                 curAdjacency = nextAdjacency;
                 children = maxNode.getChildren();
