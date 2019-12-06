@@ -20,7 +20,7 @@ public final class GenotypingDataUnitTest {
         final AlleleLikelihoods<GATKRead, Allele> likelihoods = ReadLikelihoodsUnitTester.readLikelihoods(2, readCounts);
         final SampleList sampleList = likelihoods;
         final PloidyModel ploidyModel = new HeterogeneousPloidyModel(sampleList, ploidies);
-        final GenotypingData<Allele> data = new GenotypingData<>(ploidyModel, likelihoods);
+        final GenotypingData<Allele, GATKRead> data = new GenotypingData<>(ploidyModel, likelihoods);
         Assert.assertEquals(data.asListOfAlleles(), likelihoods.asListOfAlleles());
         Assert.assertEquals(data.asListOfSamples(), likelihoods.asListOfSamples());
         Assert.assertEquals(data.getLikelihoods(), likelihoods);
