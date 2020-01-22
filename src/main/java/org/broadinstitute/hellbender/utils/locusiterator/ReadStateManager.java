@@ -9,13 +9,12 @@ import org.broadinstitute.hellbender.utils.read.GATKRead;
 import java.util.*;
 
 /**
- * Manages and updates mapping from sample -> List of SAMRecordAlignmentState
+ * Manages and updates mapping from sample -> Iterable<AlignmentStateMachine>
  *
- * Optionally can keep track of all of the reads pulled off the iterator and
- * that appeared at any point in the list of SAMRecordAlignmentState for any reads.
+ * Optionally can keep track of all of the reads pulled off the iterator.
  * This functionality is only possible at this stage, as this object does the popping of
- * reads off the underlying source iterator, and presents only a pileup-like interface
- * of samples -> SAMRecordAlignmentStates.  Reconstructing the unique set of reads
+ * reads off the underlying source iterator, and presents only a pileup-like wrapper
+ * of samples -> Iterable<AlignmentStateMachine>.  Reconstructing the unique set of reads
  * used across all pileups is extremely expensive from that data structure.
  */
 final class ReadStateManager implements Iterable<Map.Entry<String, PerSampleReadStateManager>> {

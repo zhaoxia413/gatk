@@ -379,9 +379,7 @@ public final class LocusIteratorByState implements Iterator<AlignmentContext> {
      * owns the list returned by this call.  This is the only way to clear the tracking
      * of submitted reads, if enabled.
      *
-     * The purpose of this function is allow users of LIBS to keep track of all of the reads pulled off the
-     * underlying GATKRead iterator and that appeared at any point in the list of SAMRecordAlignmentState for
-     * any reads.  This function is intended to allow users to efficiently reconstruct the unique set of reads
+     * The purpose of this function is allow users  to efficiently reconstruct the unique set of reads
      * used across all pileups.  This is necessary for LIBS to handle because attempting to do
      * so from the pileups coming out of LIBS is extremely expensive.
      *
