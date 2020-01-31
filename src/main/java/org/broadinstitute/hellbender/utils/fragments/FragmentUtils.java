@@ -6,8 +6,6 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 
-import java.util.List;
-import java.util.Optional;
 import java.util.OptionalInt;
 
 public final class FragmentUtils {
@@ -44,7 +42,8 @@ public final class FragmentUtils {
             return;
         }
 
-        final Pair<Integer, Boolean> offset = ReadUtils.getReadCoordinateForReferenceCoordinate(firstRead, secondRead.getStart(), false);
+
+        final Pair<Integer, Boolean> offset = ReadUtils.getReadCoordinateForReferenceCoordinate(firstRead, secondRead.getStart());
         final int firstReadStop = (offset.getRight() ? offset.getLeft() + 1 : offset.getLeft());
         final int numOverlappingBases = Math.min(firstRead.getLength() - firstReadStop, secondRead.getLength());
 

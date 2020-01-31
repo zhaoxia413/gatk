@@ -61,7 +61,7 @@ public class CountNs extends InfoFieldAnnotation {
             return false;
         }
 
-        final Pair<Integer, Boolean> offsetAndInsideDeletion = ReadUtils.getReadCoordinateForReferenceCoordinate(read, vc.getStart(), true);
+        final Pair<Integer, Boolean> offsetAndInsideDeletion = ReadUtils.getReadCoordinateForReferenceCoordinate(read, vc.getStart());
 
         if (offsetAndInsideDeletion.getRight()) {
             return false;
