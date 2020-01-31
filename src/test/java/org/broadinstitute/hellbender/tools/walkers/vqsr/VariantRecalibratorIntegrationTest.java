@@ -40,8 +40,7 @@ public class VariantRecalibratorIntegrationTest extends CommandLineProgramTest {
             getLargeVQSRTestDataDir() + "Omni25_sites_1525_samples.b37.20.1M-10M.vcf",
             "-an", "QD", "-an", "HaplotypeScore", "-an", "HRun",
             "--trust-all-polymorphic", // for speed
-            "-mode", "SNP",
-            "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
+            "-mode", "SNP"
         };
 
     private final String[] alleleSpecificVQSRParams =

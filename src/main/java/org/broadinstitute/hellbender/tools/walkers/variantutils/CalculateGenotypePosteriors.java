@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.variantutils;
 
+import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
@@ -12,6 +13,7 @@ import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import picard.cmdline.programgroups.VariantEvaluationProgramGroup;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -265,9 +267,22 @@ public final class CalculateGenotypePosteriors extends VariantWalker {
 
     @Override
     public void onTraversalStart() {
+        //check references
+        final SAMSequenceDictionary mainDict = getBestAvailableSequenceDictionary();
+        for (final FeatureInput<VariantContext> resource : supportVariants) {
+            if (getHeaderForFeatures(resource) instanceof VCFHeader) {
+                final VCFHeader resourceHeader = (VCFHeader) getHeaderForFeatures(resource);
+                if (!resourceHeader.getSequenceDictionary().isSameDictionary(mainDict)) {
+                    throw new UserException.BadInput("Resource " + resource.getFeaturePath() + " should have a sequence dictionary matching the input VCF " + drivingVariantFile);
+                }
+            } else {
+                throw new IllegalArgumentException("Resource " + resource.getFeaturePath() + " should be a VCF file.");
+            }
+        }
+
         vcfWriter = createVCFWriter(out);
 
-        SampleDB sampleDB = initializeSampleDB();
+        final SampleDB sampleDB = initializeSampleDB();
 
         // Get list of samples to include in the output
         final Map<String, VCFHeader> vcfHeaders = Collections.singletonMap(getDrivingVariantsFeatureInput().getName(), getHeaderForVariants());

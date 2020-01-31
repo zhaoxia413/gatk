@@ -184,4 +184,17 @@ public final class CalculateGenotypePosteriorsIntegrationTest extends CommandLin
 
         runCommandLine(args);
     }
+
+    @Test(expectedExceptions = UserException.BadInput.class)
+    public void testMismatchedReferences(){
+        final File out = createTempFile("out", ".vcf.gz");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addOutput(out)
+                .addVCF(getTestFile("testFamilyPriors_chr20.vcf")) //contig 20 and 21
+                .addArgument("supporting-callsets", toolsTestDir + "/walkers/GnarlyGenotyper/sample1.vcf");  //contigs chr21 and chr21
+        //variants might not overlap, but it shouldn't matter -- we should fail fast
+
+        runCommandLine(args);
+    }
 }
