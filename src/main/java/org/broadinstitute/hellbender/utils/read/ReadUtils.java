@@ -755,9 +755,9 @@ public final class ReadUtils {
         // clipping the left tail and first base is insertion, go to the next read coordinate
         // with the same reference coordinate. Advance to the next cigar element, or to the
         // end of the read if there is no next element.
-        final CigarElement firstElementIsInsertion = readStartsWithInsertion(cigar);
-        if (readCoord == 0 && tail == ClippingTail.LEFT_TAIL && firstElementIsInsertion != null) {
-            readCoord = Math.min(firstElementIsInsertion.getLength(), cigar.getReadLength() - 1);
+        final int leadingInsertionLength = leadingInsertionLength(cigar);
+        if (readCoord == 0 && tail == ClippingTail.LEFT_TAIL && leadingInsertionLength > 0) {
+            readCoord = Math.min(leadingInsertionLength, cigar.getReadLength() - 1);
         }
 
         return readCoord;
@@ -885,32 +885,17 @@ public final class ReadUtils {
     }
 
     /**
-     * @see #readStartsWithInsertion(Cigar, boolean) with ignoreClipOps set to true
+     * The number of inserted bases at the beginning of a cigar, not counting clips.  Zero if the cigar doesn't start with an insertion.
      */
-    public static CigarElement readStartsWithInsertion(final Cigar cigarForRead) {
-        return readStartsWithInsertion(cigarForRead, true);
-    }
-
-    public static CigarElement readStartsWithInsertion(final Cigar cigarForRead, final boolean ignoreSoftClipOps) {
-        return readStartsWithInsertion(cigarForRead.getCigarElements(), ignoreSoftClipOps);
-    }
-
-    /**
-     * Checks if a read starts with an insertion.
-     *
-     * @param cigarElementsForRead    the CIGAR to evaluate
-     * @param ignoreSoftClipOps   should we ignore S operators when evaluating whether an I operator is at the beginning?  Note that H operators are always ignored.
-     * @return the element if it's a leading insertion or null otherwise
-     */
-    public static CigarElement readStartsWithInsertion(final List<CigarElement> cigarElementsForRead, final boolean ignoreSoftClipOps) {
-        for ( final CigarElement cigarElement : cigarElementsForRead ) {
+    private static int leadingInsertionLength(final Cigar cigar) {
+        for ( final CigarElement cigarElement : cigar ) {
             if ( cigarElement.getOperator() == CigarOperator.INSERTION ) {
-                return cigarElement;
-            } else if ( cigarElement.getOperator() != CigarOperator.HARD_CLIP && ( !ignoreSoftClipOps || cigarElement.getOperator() != CigarOperator.SOFT_CLIP) ) {
-                break;
+                return cigarElement.getLength();
+            } else if ( !cigarElement.getOperator().isClipping()) {
+                return 0;
             }
         }
-        return null;
+        return 0;
     }
 
     /**
