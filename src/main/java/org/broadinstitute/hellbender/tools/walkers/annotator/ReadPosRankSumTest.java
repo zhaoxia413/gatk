@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.tools.walkers.annotator;
 import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
+import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
@@ -50,14 +51,9 @@ public final class ReadPosRankSumTest extends RankSumTest implements StandardAnn
 
     public static OptionalDouble getReadPosition(final GATKRead read, final int refLoc) {
         Utils.nonNull(read);
-        final int offset = ReadUtils.getReadCoordinateForReferenceCoordinate(read.getSoftStart(), read.getCigar(), refLoc, ReadUtils.ClippingTail.RIGHT_TAIL, true);
-        if ( offset == ReadUtils.CLIPPING_GOAL_NOT_REACHED ) {
+        final Pair<Integer, CigarOperator> offset = ReadUtils.getReadCoordinateForReferenceCoordinate(read, refLoc);
+        if ( offset.getRight() == null || !offset.getRight().consumesReadBases() ) {
             return OptionalDouble.empty();
-        }
-
-        // If the offset inside a deletion, it does not lie on a read.
-        if ( AlignmentUtils.isInsideDeletion(read.getCigar(), offset) ) {
-            return OptionalDouble.of(INVALID_ELEMENT_FROM_READ);
         }
 
         // hard clips at this point in the code are perfectly good bases that were clipped to make the read fit the assembly region
@@ -67,7 +63,7 @@ public final class ReadPosRankSumTest extends RankSumTest implements StandardAnn
         final int leadingHardClips = firstElement.getOperator() == CigarOperator.HARD_CLIP ? firstElement.getLength() : 0;
         final int trailingHardClips = lastElement.getOperator() == CigarOperator.HARD_CLIP ? lastElement.getLength() : 0;
 
-        int readPos = leadingHardClips + AlignmentUtils.calcAlignmentByteArrayOffset(read.getCigar(), offset, false, 0, 0);
+        int readPos = leadingHardClips + AlignmentUtils.calcAlignmentByteArrayOffset(read.getCigar(), offset.getLeft(), false, 0, 0);
         final int numAlignedBases = AlignmentUtils.getNumAlignedBasesCountingSoftClips( read );
         final int numOriginalBases = numAlignedBases + leadingHardClips + trailingHardClips;
 

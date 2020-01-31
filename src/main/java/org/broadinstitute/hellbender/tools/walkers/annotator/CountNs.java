@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.tools.walkers.annotator;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
+import htsjdk.samtools.CigarOperator;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFInfoHeaderLine;
@@ -56,19 +57,7 @@ public class CountNs extends InfoFieldAnnotation {
 
     @VisibleForTesting
     static Boolean doesReadHaveN(final GATKRead read, final VariantContext vc) {
-
-        if (vc.getStart() < read.getStart() || read.getEnd() < vc.getStart()) {
-            return false;
-        }
-
-        final Pair<Integer, Boolean> offsetAndInsideDeletion = ReadUtils.getReadCoordinateForReferenceCoordinate(read, vc.getStart());
-
-        if (offsetAndInsideDeletion.getRight()) {
-            return false;
-        } else {
-            final int offset = offsetAndInsideDeletion.getLeft();
-            return !(offset == ReadUtils.CLIPPING_GOAL_NOT_REACHED || offset < 0 || offset >= read.getLength() || AlignmentUtils.isInsideDeletion(read.getCigar(), offset))
-                    && read.getBase(offset) == 'N';
-        }
+        final Optional<Byte> readBase = ReadUtils.getReadBaseAtReferenceCoordinate(read, vc.getStart());
+        return readBase.isPresent() && readBase.get() == 'N';
     }
 }

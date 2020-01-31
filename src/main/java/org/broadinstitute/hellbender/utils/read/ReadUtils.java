@@ -675,45 +675,49 @@ public final class ReadUtils {
     }
 
     /**
-     * Pre-processes the results of {@link #getReadCoordinateForReferenceCoordinate(int, Cigar, int, boolean)} to take care of
-     * two corner cases:
-     *
-     * 1. If clipping the right tail (end of the read) getReadCoordinateForReferenceCoordinate and fall inside
-     * a deletion return the base after the deletion. If clipping the left tail (beginning of the read) it
-     * doesn't matter because it already returns the previous base by default.
-     *
-     * 2. If clipping the left tail (beginning of the read) getReadCoordinateForReferenceCoordinate and the
-     * read starts with an insertion, and you're requesting the first read based coordinate, it will skip
-     * the leading insertion (because it has the same reference coordinate as the following base).
-     *
-     * @return the read coordinate corresponding to the requested reference coordinate for clipping.
-     */
-    public static int getReadCoordinateForReferenceCoordinate(final GATKRead read, final int refCoord, final ClippingTail tail) {
-        return getReadCoordinateForReferenceCoordinate(read.getSoftStart(), read.getCigar(), refCoord, tail, false);
-    }
-
-    /**
-     * Returns the read coordinate corresponding to the requested reference coordinate.
-     *
-     * WARNING: if the requested reference coordinate happens to fall inside or just before a deletion (or skipped region) in the read, this function
-     * will return the last read base before the deletion (or skipped region). This function returns a
-     * Pair(int readCoord, boolean fallsInsideOrJustBeforeDeletionOrSkippedRegion) so you can choose which readCoordinate to use when faced with
-     * a deletion (or skipped region).
-     *
-     * SUGGESTION: Use getReadCoordinateForReferenceCoordinate(GATKSAMRecord, int, ClippingTail) instead to get a
-     * pre-processed result according to normal clipping needs. Or you can use this function and tailor the
-     * behavior to your needs.
+     * Returns the read coordinate corresponding to the requested reference coordinate -- or the read coordinate immediately preceding
+     * a deletion in which the reference coordinate falls -- along with the cigar operator in which the reference coordinate occurs
      *
      * @param read
      * @param refCoord the requested reference coordinate
      * @return the read coordinate corresponding to the requested reference coordinate. (see warning!)
      */
-    public static Pair<Integer, Boolean> getReadCoordinateForReferenceCoordinate(GATKRead read, int refCoord) {
+    public static Pair<Integer, CigarOperator> getReadCoordinateForReferenceCoordinate(final GATKRead read, final int refCoord) {
         return getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), refCoord, true);
+    }
+
+    public static Optional<Byte> getReadBaseAtReferenceCoordinate(final GATKRead read, final int refCoord) {
+        if (refCoord < read.getStart() || read.getEnd() < refCoord) {
+            return Optional.empty();
+        }
+        final Pair<Integer, CigarOperator> offsetAndOperator = getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), refCoord, true);
+        return (offsetAndOperator.getRight() != null && offsetAndOperator.getRight().consumesReadBases()) ?
+                Optional.of(read.getBase(offsetAndOperator.getLeft())) : Optional.empty();
+    }
+
+    public static Optional<Byte> getReadBaseQualityAtReferenceCoordinate(final GATKRead read, final int refCoord) {
+        if (refCoord < read.getStart() || read.getEnd() < refCoord) {
+            return Optional.empty();
+        }
+        final Pair<Integer, CigarOperator> offsetAndOperator = getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), refCoord, true);
+        return (offsetAndOperator.getRight() != null && offsetAndOperator.getRight().consumesReadBases()) ?
+                Optional.of(read.getBaseQuality(offsetAndOperator.getLeft())) : Optional.empty();
     }
 
     /**
      * Returns the read coordinate corresponding to the requested reference coordinate for a given alignmentStart/Cigar combination.
+     *
+     *      * Pre-processes the results of {@link #getReadCoordinateForReferenceCoordinate(int, Cigar, int, boolean)} to take care of
+     *      * two corner cases:
+     *      *
+     *      * 1. If clipping the right tail (end of the read) getReadCoordinateForReferenceCoordinate and fall inside
+     *      * a deletion return the base after the deletion. If clipping the left tail (beginning of the read) it
+     *      * doesn't matter because it already returns the previous base by default.
+     *      *
+     *      * 2. If clipping the left tail (beginning of the read) getReadCoordinateForReferenceCoordinate and the
+     *      * read starts with an insertion, and you're requesting the first read based coordinate, it will skip
+     *      * the leading insertion (because it has the same reference coordinate as the following base).
+     *      *
      *
      * WARNING: if the requested reference coordinate happens to fall inside or just before a deletion (or skipped region) in the read, this function
      * will return the last read base before the deletion (or skipped region). This function returns a
@@ -761,10 +765,10 @@ public final class ReadUtils {
      * @param allowGoalNotReached   If the reference coordinate is not within the read, do we throw an error or return CLIPPING_GOAL_NOT_REACHED
      * @return
      */
-    private static Pair<Integer, Boolean> getReadCoordinateForReferenceCoordinate(final int alignmentStart, final Cigar cigar, final int refCoord, final boolean allowGoalNotReached) {
+    private static Pair<Integer, CigarOperator> getReadCoordinateForReferenceCoordinate(final int alignmentStart, final Cigar cigar, final int refCoord, final boolean allowGoalNotReached) {
         if (refCoord < alignmentStart) {
             Utils.validateArg(allowGoalNotReached, "The reference coordinate occurs before the read start.");
-            return new MutablePair<>(CLIPPING_GOAL_NOT_REACHED, false);
+            return new MutablePair<>(CLIPPING_GOAL_NOT_REACHED, null);
         }
 
         int firstReadPosOfElement = 0;              //inclusive
@@ -772,6 +776,7 @@ public final class ReadUtils {
         int lastReadPosOfElement = 0;               //exclusive
         int lastRefPosOfElement = alignmentStart;   //exclusive
 
+        // advance forward through all the cigar elements until we bracket the reference coordinate
         for (final CigarElement element : cigar) {
             final CigarOperator operator = element.getOperator();
             firstReadPosOfElement = lastReadPosOfElement;
@@ -780,18 +785,12 @@ public final class ReadUtils {
             lastRefPosOfElement += operator.consumesReferenceBases() ? element.getLength() : 0;
 
             if (firstRefPosOfElement <= refCoord && refCoord < lastRefPosOfElement) {   // refCoord falls within this cigar element
-                    if (operator.consumesReadBases()) {
-                        return Pair.of(firstReadPosOfElement + refCoord - firstRefPosOfElement, false);
-                    } else {
-                        // TODO: add left or right tail argument
-                        // TODO: if deletion is first element and we want left tail, result is
-                        // TODO: even better -- return an IndexRange of two ints -- [4,5) means fourth base; [4,4) means deletion before 4th base;
-                        return Pair.of(firstReadPosOfElement, true);
-                    }
+                final int readPosAtRefCoord = firstReadPosOfElement + (operator.consumesReadBases() ? ( refCoord - firstRefPosOfElement) : 0);
+                return Pair.of(readPosAtRefCoord, operator);
             }
         }
         Utils.validateArg(allowGoalNotReached, "The reference coordinate occurs after the read end.");
-        return new MutablePair<>(CLIPPING_GOAL_NOT_REACHED, false);
+        return new MutablePair<>(CLIPPING_GOAL_NOT_REACHED, null);
     }
 
     /**

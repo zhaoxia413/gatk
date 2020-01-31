@@ -7,10 +7,7 @@ import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 
-import java.util.Collections;
-import java.util.List;
-import java.util.OptionalDouble;
-import java.util.OptionalInt;
+import java.util.*;
 
 
 /**
@@ -37,12 +34,7 @@ public final class BaseQualityRankSumTest extends RankSumTest implements Standar
     }
 
     public static OptionalDouble getReadBaseQuality(final GATKRead read, final int refLoc) {
-        Utils.nonNull(read);
-        if (refLoc < read.getStart() || read.getEnd() < refLoc) {
-            return OptionalDouble.empty();
-        }
-
-        final int readCoordinate = ReadUtils.getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), refLoc, ReadUtils.ClippingTail.RIGHT_TAIL, true);
-        return readCoordinate == ReadUtils.CLIPPING_GOAL_NOT_REACHED || readCoordinate < 0 || readCoordinate >= read.getLength() ? OptionalDouble.empty() : OptionalDouble.of(read.getBaseQuality(readCoordinate));
+        final Optional<Byte> readBaseQuality = ReadUtils.getReadBaseQualityAtReferenceCoordinate(read, refLoc);
+        return readBaseQuality.isPresent() ? OptionalDouble.of(readBaseQuality.get()) : OptionalDouble.empty();
     }
 }

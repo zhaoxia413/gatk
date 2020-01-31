@@ -206,7 +206,7 @@ public final class ReadUtilsUnitTest extends GATKBaseTest {
         read.setBaseQualities(Utils.dupBytes((byte)30, readLength));
         read.setCigar("3M414N1D73M");
 
-        final int result = ReadUtils.getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), 9392, ReadUtils.ClippingTail.LEFT_TAIL, true);
+        final int result = ReadUtils.getReadCoordinateForReferenceCoordinate(read, 9392).getLeft();
         Assert.assertEquals(result, 2);
     }
 
@@ -221,7 +221,7 @@ public final class ReadUtilsUnitTest extends GATKBaseTest {
             read.setBaseQualities(Utils.dupBytes((byte) 30, readLength));
             read.setCigar("3M414N1D73M");
 
-            final int result = ReadUtils.getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), 9393, ReadUtils.ClippingTail.LEFT_TAIL, true);
+            final int result = ReadUtils.getReadCoordinateForReferenceCoordinate(read, 9393).getLeft();
             Assert.assertEquals(result, 3);
         }
     }

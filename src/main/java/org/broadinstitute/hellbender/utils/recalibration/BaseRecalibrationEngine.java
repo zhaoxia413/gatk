@@ -1,5 +1,7 @@
 package org.broadinstitute.hellbender.utils.recalibration;
 
+import htsjdk.samtools.CigarOperator;
+import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.hellbender.utils.SerializableFunction;
 import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
@@ -337,15 +339,11 @@ public final class BaseRecalibrationEngine implements Serializable {
                 // knownSite is outside clipping window for the read, ignore
                 continue;
             }
-            int featureStartOnRead = ReadUtils.getReadCoordinateForReferenceCoordinate(softStart, cigar, knownSite.getStart(), ReadUtils.ClippingTail.LEFT_TAIL, true);
-            if( featureStartOnRead == ReadUtils.CLIPPING_GOAL_NOT_REACHED ) {
-                featureStartOnRead = 0;
-            }
+            final Pair<Integer, CigarOperator> featureStartAndOperatorOnRead = ReadUtils.getReadCoordinateForReferenceCoordinate(read, knownSite.getStart());
+            int featureStartOnRead = featureStartAndOperatorOnRead.getLeft() == ReadUtils.CLIPPING_GOAL_NOT_REACHED ? 0 : featureStartAndOperatorOnRead.getLeft();
 
-            int featureEndOnRead = ReadUtils.getReadCoordinateForReferenceCoordinate(softStart, cigar, knownSite.getEnd(), ReadUtils.ClippingTail.LEFT_TAIL, true);
-            if( featureEndOnRead == ReadUtils.CLIPPING_GOAL_NOT_REACHED ) {
-                featureEndOnRead = readLength;
-            }
+            final Pair<Integer, CigarOperator> featureEndAndOperatorOnRead = ReadUtils.getReadCoordinateForReferenceCoordinate(read, knownSite.getEnd());
+            int featureEndOnRead = featureEndAndOperatorOnRead.getLeft() == ReadUtils.CLIPPING_GOAL_NOT_REACHED ? 0 : featureEndAndOperatorOnRead.getLeft();
 
             if( featureStartOnRead > readLength ) {
                 featureStartOnRead = featureEndOnRead = readLength;

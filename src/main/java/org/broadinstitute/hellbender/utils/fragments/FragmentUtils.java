@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.utils.fragments;
 
+import htsjdk.samtools.CigarOperator;
 import htsjdk.samtools.util.QualityUtil;
 import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -42,9 +43,17 @@ public final class FragmentUtils {
             return;
         }
 
+        // the offset and cigar operator in the first read at the start of the left read
+        final Pair<Integer, CigarOperator> offsetAndOperator = ReadUtils.getReadCoordinateForReferenceCoordinate(firstRead, secondRead.getStart());
+        final CigarOperator operator = offsetAndOperator.getRight();
+        if (operator == null) { // no overlap
+            return;
+        }
+        final int offset = offsetAndOperator.getLeft();
 
-        final Pair<Integer, Boolean> offset = ReadUtils.getReadCoordinateForReferenceCoordinate(firstRead, secondRead.getStart());
-        final int firstReadStop = (offset.getRight() ? offset.getLeft() + 1 : offset.getLeft());
+        // TODO: use ReadUtils for this logic?
+        // if the operator is a deletion, the offset is the base preceding it.  We want the next base in this case.
+        final int firstReadStop = operator.consumesReadBases() ? offset : offset + 1;
         final int numOverlappingBases = Math.min(firstRead.getLength() - firstReadStop, secondRead.getLength());
 
         final byte[] firstReadBases = firstRead.getBases();
