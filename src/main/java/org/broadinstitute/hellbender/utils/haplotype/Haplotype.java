@@ -6,6 +6,7 @@ import htsjdk.samtools.CigarOperator;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.Allele;
 import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.AlignmentUtils;
@@ -196,9 +197,17 @@ public final class Haplotype extends Allele {
 
     public Haplotype insertAllele( final Allele refAllele, final Allele altAllele, final int refInsertLocation, final int genomicInsertLocation ) {
         // refInsertLocation is in ref haplotype offset coordinates NOT genomic coordinates
-        final int haplotypeInsertLocation = ReadUtils.getReadCoordinateForReferenceCoordinate(alignmentStartHapwrtRef, cigar, refInsertLocation, ReadUtils.ClippingTail.RIGHT_TAIL, true);
-        final byte[] myBases = this.getBases();
-        if( haplotypeInsertLocation == -1 || haplotypeInsertLocation + refAllele.length() >= myBases.length ) { // desired change falls inside deletion so don't bother creating a new haplotype
+        final Pair<Integer, CigarOperator> haplotypeInsertLocationAndOperator = ReadUtils.getReadCoordinateForReferenceCoordinate(alignmentStartHapwrtRef, cigar, refInsertLocation, true);
+
+        // can't insert into a deletion, or outside the haplotype
+        if( haplotypeInsertLocationAndOperator.getRight() == null || !haplotypeInsertLocationAndOperator.getRight().consumesReadBases() ) { // desired change falls inside deletion so don't bother creating a new haplotype
+            return null;
+        }
+        final int haplotypeInsertLocation = haplotypeInsertLocationAndOperator.getLeft();
+        final byte[] myBases = getBases();
+
+        // can't insert if we don't have any sequence after the inserted alt allele to span the new variant
+        if (haplotypeInsertLocation + refAllele.length() >= myBases.length) {
             return null;
         }
 

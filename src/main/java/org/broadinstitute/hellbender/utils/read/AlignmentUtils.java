@@ -3,12 +3,10 @@ package org.broadinstitute.hellbender.utils.read;
 import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
-import htsjdk.samtools.util.Tuple;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.gatk.nativebindings.smithwaterman.SWOverhangStrategy;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.utils.BaseUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
@@ -594,112 +592,6 @@ public final class AlignmentUtils {
         }
 
         return alignmentPos;
-    }
-
-    /**
-     * Is the offset inside a deletion?
-     *
-     * @param cigar         the read's CIGAR -- cannot be null
-     * @param offset        the offset into the CIGAR
-     * @return true if the offset is inside a deletion, false otherwise
-     */
-    public static boolean isInsideDeletion(final Cigar cigar, final int offset) {
-        Utils.nonNull(cigar);
-        if ( offset < 0 ) return false;
-
-        // pos counts read bases
-        int pos = 0;
-        int prevPos = 0;
-
-        for (final CigarElement ce : cigar.getCigarElements()) {
-
-            switch (ce.getOperator()) {
-                case I:
-                case S:
-                case D:
-                case M:
-                case EQ:
-                case X:
-                    prevPos = pos;
-                    pos += ce.getLength();
-                    break;
-                case H:
-                case P:
-                case N:
-                    break;
-                default:
-                    throw new GATKException("Unsupported cigar operator: " + ce.getOperator());
-            }
-
-            // Is the offset inside a deletion?
-            if ( prevPos < offset && pos >= offset && ce.getOperator() == CigarOperator.D ) {
-                return true;
-
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Generate an array of bases for just those that are aligned to the reference (i.e. no clips or insertions)
-     *
-     * @param cigar            the read's CIGAR -- cannot be null
-     * @param read             the read's base array
-     * @return a non-null array of bases (bytes)
-     */
-    @SuppressWarnings("fallthrough")
-    public static byte[] readToAlignmentByteArray(final Cigar cigar, final byte[] read) {
-        Utils.nonNull(cigar);
-        Utils.nonNull(read);
-
-        final int alignmentLength = cigar.getReferenceLength();
-        final byte[] alignment = new byte[alignmentLength];
-        int alignPos = 0;
-        int readPos = 0;
-        for (int iii = 0; iii < cigar.numCigarElements(); iii++) {
-
-            final CigarElement ce = cigar.getCigarElement(iii);
-            final int elementLength = ce.getLength();
-
-            switch (ce.getOperator()) {
-                case I:
-                    if (alignPos > 0) {
-                        final int prevPos = alignPos - 1;
-                        if (alignment[prevPos] == BaseUtils.Base.A.base) {
-                            alignment[prevPos] = PileupElement.A_FOLLOWED_BY_INSERTION_BASE;
-                        } else if (alignment[prevPos] == BaseUtils.Base.C.base) {
-                            alignment[prevPos] = PileupElement.C_FOLLOWED_BY_INSERTION_BASE;
-                        } else if (alignment[prevPos] == BaseUtils.Base.T.base) {
-                            alignment[prevPos] = PileupElement.T_FOLLOWED_BY_INSERTION_BASE;
-                        } else if (alignment[prevPos] == BaseUtils.Base.G.base) {
-                            alignment[prevPos] = PileupElement.G_FOLLOWED_BY_INSERTION_BASE;
-                        }
-                    }
-                case S:
-                    readPos += elementLength;
-                    break;
-                case D:
-                case N:
-                    for (int jjj = 0; jjj < elementLength; jjj++) {
-                        alignment[alignPos++] = PileupElement.DELETION_BASE;
-                    }
-                    break;
-                case M:
-                case EQ:
-                case X:
-                    for (int jjj = 0; jjj < elementLength; jjj++) {
-                        alignment[alignPos++] = read[readPos++];
-                    }
-                    break;
-                case H:
-                case P:
-                    break;
-                default:
-                    throw new GATKException("Unsupported cigar operator: " + ce.getOperator());
-            }
-        }
-        return alignment;
     }
 
     /**

@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.utils.clipping;
 
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.GATKException;
@@ -480,13 +481,14 @@ public class ReadClipper {
                 throw new GATKException("Only one of refStart or refStop must be < 0, not both (" + refStart + ", " + refStop + ")");
             }
             start = 0;
-            stop = ReadUtils.getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), refStop, ReadUtils.ClippingTail.LEFT_TAIL, false);
+            stop = ReadUtils.getReadCoordinateForReferenceCoordinate(read, refStop).getLeft();
         }
         else {
             if (refStop >= 0) {
                 throw new GATKException("Either refStart or refStop must be < 0 (" + refStart + ", " + refStop + ")");
             }
-            start = ReadUtils.getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), refStart, ReadUtils.ClippingTail.RIGHT_TAIL, false);
+            final Pair<Integer, CigarOperator> startAndOperator = ReadUtils.getReadCoordinateForReferenceCoordinate(read, refStart);
+            start = startAndOperator.getLeft() + (startAndOperator.getRight().consumesReadBases() ? 0 : 1);
             stop = read.getLength() - 1;
         }
 

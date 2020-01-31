@@ -705,59 +705,6 @@ public final class ReadUtils {
     }
 
     /**
-     * Returns the read coordinate corresponding to the requested reference coordinate for a given alignmentStart/Cigar combination.
-     *
-     *      * Pre-processes the results of {@link #getReadCoordinateForReferenceCoordinate(int, Cigar, int, boolean)} to take care of
-     *      * two corner cases:
-     *      *
-     *      * 1. If clipping the right tail (end of the read) getReadCoordinateForReferenceCoordinate and fall inside
-     *      * a deletion return the base after the deletion. If clipping the left tail (beginning of the read) it
-     *      * doesn't matter because it already returns the previous base by default.
-     *      *
-     *      * 2. If clipping the left tail (beginning of the read) getReadCoordinateForReferenceCoordinate and the
-     *      * read starts with an insertion, and you're requesting the first read based coordinate, it will skip
-     *      * the leading insertion (because it has the same reference coordinate as the following base).
-     *      *
-     *
-     * WARNING: if the requested reference coordinate happens to fall inside or just before a deletion (or skipped region) in the read, this function
-     * will return the last read base before the deletion (or skipped region). This function returns a
-     * Pair(int readCoord, boolean fallsInsideOrJustBeforeDeletionOrSkippedRegion) so you can choose which readCoordinate to use when faced with
-     * a deletion (or skipped region).
-     *
-     * SUGGESTION: Use getReadCoordinateForReferenceCoordinate(GATKSAMRecord, int, ClippingTail) instead to get a
-     * pre-processed result according to normal clipping needs. Or you can use this function and tailor the
-     * behavior to your needs.
-     *
-     * @param alignmentStart alignment start of the cigar to the reference
-     * @param cigar cigar with which to compute the offset
-     * @param refCoord the requested reference coordinate
-     * @param tail controls whether the the preceding or following base of a deletion/insertion is returned
-     * @param allowGoalNotReached if true, will return a pair of CLIPPING_GOAL_NOT_REACHED and false a refCoord that doesn't exist on the read is requested, otherwise an exception will be thrown
-     * @return the read coordinate corresponding to the requested reference coordinate. (see warning!)
-     */
-    public static int getReadCoordinateForReferenceCoordinate(final int alignmentStart, final Cigar cigar, final int refCoord, final ClippingTail tail, final boolean allowGoalNotReached) {
-        final Pair<Integer, Boolean> result = getReadCoordinateForReferenceCoordinate(alignmentStart, cigar, refCoord, allowGoalNotReached);
-        int readCoord = result.getLeft();
-
-        // Corner case one: clipping the right tail and falls on deletion, move to the next
-        // read coordinate. It is not a problem for the left tail because the default answer
-        // from getReadCoordinateForReferenceCoordinate is to give the previous read coordinate.
-        if (result.getRight() && tail == ClippingTail.RIGHT_TAIL) {
-            readCoord++;
-        }
-
-        // clipping the left tail and first base is insertion, go to the next read coordinate
-        // with the same reference coordinate. Advance to the next cigar element, or to the
-        // end of the read if there is no next element.
-        final int leadingInsertionLength = leadingInsertionLength(cigar);
-        if (readCoord == 0 && tail == ClippingTail.LEFT_TAIL && leadingInsertionLength > 0) {
-            readCoord = Math.min(leadingInsertionLength, cigar.getReadLength() - 1);
-        }
-
-        return readCoord;
-    }
-
-    /**
      *
      * @param alignmentStart        The start of the read on the reference (NOT the soft start)
      * @param cigar                 The read's cigar
@@ -765,7 +712,7 @@ public final class ReadUtils {
      * @param allowGoalNotReached   If the reference coordinate is not within the read, do we throw an error or return CLIPPING_GOAL_NOT_REACHED
      * @return
      */
-    private static Pair<Integer, CigarOperator> getReadCoordinateForReferenceCoordinate(final int alignmentStart, final Cigar cigar, final int refCoord, final boolean allowGoalNotReached) {
+    public static Pair<Integer, CigarOperator> getReadCoordinateForReferenceCoordinate(final int alignmentStart, final Cigar cigar, final int refCoord, final boolean allowGoalNotReached) {
         if (refCoord < alignmentStart) {
             Utils.validateArg(allowGoalNotReached, "The reference coordinate occurs before the read start.");
             return new MutablePair<>(CLIPPING_GOAL_NOT_REACHED, null);
@@ -802,20 +749,6 @@ public final class ReadUtils {
      */
     public static boolean isInsideRead(final GATKRead read, final int referenceCoordinate) {
         return referenceCoordinate >= read.getStart() && referenceCoordinate <= read.getEnd();
-    }
-
-    /**
-     * The number of inserted bases at the beginning of a cigar, not counting clips.  Zero if the cigar doesn't start with an insertion.
-     */
-    private static int leadingInsertionLength(final Cigar cigar) {
-        for ( final CigarElement cigarElement : cigar ) {
-            if ( cigarElement.getOperator() == CigarOperator.INSERTION ) {
-                return cigarElement.getLength();
-            } else if ( !cigarElement.getOperator().isClipping()) {
-                return 0;
-            }
-        }
-        return 0;
     }
 
     /**
