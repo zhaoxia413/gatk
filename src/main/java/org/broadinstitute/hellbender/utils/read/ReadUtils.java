@@ -683,14 +683,14 @@ public final class ReadUtils {
      * @return the read coordinate corresponding to the requested reference coordinate. (see warning!)
      */
     public static Pair<Integer, CigarOperator> getReadCoordinateForReferenceCoordinate(final GATKRead read, final int refCoord) {
-        return getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), refCoord, true);
+        return getReadCoordinateForReferenceCoordinate(read.getSoftStart(), read.getCigar(), refCoord, true);
     }
 
     public static Optional<Byte> getReadBaseAtReferenceCoordinate(final GATKRead read, final int refCoord) {
         if (refCoord < read.getStart() || read.getEnd() < refCoord) {
             return Optional.empty();
         }
-        final Pair<Integer, CigarOperator> offsetAndOperator = getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), refCoord, true);
+        final Pair<Integer, CigarOperator> offsetAndOperator = getReadCoordinateForReferenceCoordinate(read.getSoftStart(), read.getCigar(), refCoord, true);
         return (offsetAndOperator.getRight() != null && offsetAndOperator.getRight().consumesReadBases()) ?
                 Optional.of(read.getBase(offsetAndOperator.getLeft())) : Optional.empty();
     }
@@ -699,18 +699,24 @@ public final class ReadUtils {
         if (refCoord < read.getStart() || read.getEnd() < refCoord) {
             return Optional.empty();
         }
-        final Pair<Integer, CigarOperator> offsetAndOperator = getReadCoordinateForReferenceCoordinate(read.getStart(), read.getCigar(), refCoord, true);
+        final Pair<Integer, CigarOperator> offsetAndOperator = getReadCoordinateForReferenceCoordinate(read.getSoftStart(), read.getCigar(), refCoord, true);
         return (offsetAndOperator.getRight() != null && offsetAndOperator.getRight().consumesReadBases()) ?
                 Optional.of(read.getBaseQuality(offsetAndOperator.getLeft())) : Optional.empty();
     }
 
     /**
+     * Find the index within a read's bases corresponding to a given position in the reference, along with the cigar operator of
+     * the element containing that base.  If the reference coordinate occurs within a deletion, the first index after the deletion is returned.
+     * Note that this treats soft-clipped bases as if they align with the reference, which is useful for hard-clipping reads with soft clips.
      *
-     * @param alignmentStart        The start of the read on the reference (NOT the soft start)
+     * @param alignmentStart        The soft start of the read on the reference
      * @param cigar                 The read's cigar
      * @param refCoord              The target reference coordinate
      * @param allowGoalNotReached   If the reference coordinate is not within the read, do we throw an error or return CLIPPING_GOAL_NOT_REACHED
-     * @return
+     * @return                      If the reference coordinate occurs before the read start or after the read end {@code CLIPPING_GOAL_NOT_REACHED};
+     *                              if the reference coordinate falls within an alignment block of the read's cigar, the corresponding read coordinate;
+     *                              if the reference coordinate falls within a deletion, the first read coordinate after the deletion.  Note: if the last cigar element is
+     *                              a deletion (which isn't meaningful), it returns {@code CLIPPING_GOAL_NOT_REACHED}.
      */
     public static Pair<Integer, CigarOperator> getReadCoordinateForReferenceCoordinate(final int alignmentStart, final Cigar cigar, final int refCoord, final boolean allowGoalNotReached) {
         if (refCoord < alignmentStart) {
@@ -729,7 +735,7 @@ public final class ReadUtils {
             firstReadPosOfElement = lastReadPosOfElement;
             firstRefPosOfElement = lastRefPosOfElement;
             lastReadPosOfElement += operator.consumesReadBases() ? element.getLength() : 0;
-            lastRefPosOfElement += operator.consumesReferenceBases() ? element.getLength() : 0;
+            lastRefPosOfElement += operator.consumesReferenceBases() || operator == CigarOperator.S ? element.getLength() : 0;
 
             if (firstRefPosOfElement <= refCoord && refCoord < lastRefPosOfElement) {   // refCoord falls within this cigar element
                 final int readPosAtRefCoord = firstReadPosOfElement + (operator.consumesReadBases() ? ( refCoord - firstRefPosOfElement) : 0);

@@ -488,8 +488,12 @@ public class ReadClipper {
                 throw new GATKException("Either refStart or refStop must be < 0 (" + refStart + ", " + refStop + ")");
             }
             final Pair<Integer, CigarOperator> startAndOperator = ReadUtils.getReadCoordinateForReferenceCoordinate(read, refStart);
-            start = startAndOperator.getLeft() + (startAndOperator.getRight().consumesReadBases() ? 0 : 1);
+            start = startAndOperator.getLeft();
             stop = read.getLength() - 1;
+        }
+
+        if (start == ReadUtils.CLIPPING_GOAL_NOT_REACHED | stop == ReadUtils.CLIPPING_GOAL_NOT_REACHED) {
+            return read;
         }
 
         if (start < 0 || stop > read.getLength() - 1) {
