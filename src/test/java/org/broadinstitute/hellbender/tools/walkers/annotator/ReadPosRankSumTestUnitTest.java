@@ -119,6 +119,17 @@ public final class ReadPosRankSumTestUnitTest extends GATKBaseTest {
         Assert.assertEquals(readPosRankSumTest.isUsableRead(read, refLoc), isUsable);
     }
 
+    @Test
+    public void testSNPBetweenTwoDeletions(){
+        final Cigar cigar = TextCigarCodec.decode("10M10D1M10D10M");
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(cigar);
+        final int start = 100;
+        read.setPosition("CONTIG", start);
+
+        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start + 20).getAsDouble(), 10.0);
+        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start + 19).getAsDouble(), 10.0);
+    }
+
     //Basic aligned read
     private GATKRead allMatch;
 

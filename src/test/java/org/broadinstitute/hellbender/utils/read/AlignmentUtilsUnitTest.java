@@ -652,61 +652,6 @@ public final class AlignmentUtilsUnitTest {
         return cigar.toString();
     }
 
-    ////////////////////////////////////////////////////////
-    // Test AlignmentUtils.calcAlignmentByteArrayOffset() //
-    ////////////////////////////////////////////////////////
-
-    @DataProvider(name = "AlignmentByteArrayOffsetDataProvider")
-    public Object[][] makeAlignmentByteArrayOffsetDataProvider() {
-        List<Object[]> tests = new ArrayList<>();
-
-        final int readLength = 20;
-        final int lengthOfIndel = 2;
-        final int locationOnReference = 20;
-
-        for ( int offset = 0; offset < readLength; offset++ ) {
-            for ( final int lengthOfSoftClip : Arrays.asList(0, 1, 10) ) {
-                for ( final int lengthOfFirstM : Arrays.asList(0, 3) ) {
-                    for ( final char middleOp : Arrays.asList('M', 'D', 'I') ) {
-
-                        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "myRead", 0, locationOnReference, readLength);
-                        // create the CIGAR string
-                        read.setCigar(buildTestCigarString(middleOp, lengthOfSoftClip, lengthOfFirstM, lengthOfIndel, readLength));
-
-                        // now, determine the expected alignment offset
-                        final int expected;
-                        boolean isDeletion = false;
-                        if ( offset < lengthOfSoftClip ) {
-                            expected = 0;
-                        } else if ( middleOp == 'M' || offset < lengthOfSoftClip + lengthOfFirstM ) {
-                            expected = offset - lengthOfSoftClip;
-                        } else if ( offset < lengthOfSoftClip + lengthOfFirstM + lengthOfIndel ) {
-                            if ( middleOp == 'D' ) {
-                                isDeletion = true;
-                                expected = offset - lengthOfSoftClip;
-                            } else {
-                                expected = lengthOfFirstM;
-                            }
-                        } else {
-                            expected = offset - lengthOfSoftClip - (middleOp == 'I' ? lengthOfIndel : -lengthOfIndel);
-                        }
-
-                        tests.add(new Object[]{read.getCigar(), offset, expected, isDeletion, lengthOfSoftClip});
-                    }
-                }
-            }
-        }
-
-        return tests.toArray(new Object[][]{});
-    }
-
-    @Test(enabled = !DEBUG, dataProvider = "AlignmentByteArrayOffsetDataProvider")
-    public void testAlignmentByteArrayOffsetData(final Cigar cigar, final int offset, final int expectedResult, final boolean isDeletion, final int lengthOfSoftClip) {
-        final int actual = AlignmentUtils.calcAlignmentByteArrayOffset(cigar, isDeletion ? -1 : offset, isDeletion, 20, 20 + offset - lengthOfSoftClip);
-        Assert.assertEquals(actual, expectedResult, "Wrong alignment offset detected for cigar " + cigar.toString());
-    }
-
-
     ///////////////////////////////////////////////////////////////////
     // Test AlignmentUtils.getBasesAndBaseQualitiesAlignedOneToOne() //
     ///////////////////////////////////////////////////////////////////

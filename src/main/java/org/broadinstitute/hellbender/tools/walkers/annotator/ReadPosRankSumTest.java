@@ -63,7 +63,7 @@ public final class ReadPosRankSumTest extends RankSumTest implements StandardAnn
         final int leadingHardClips = firstElement.getOperator() == CigarOperator.HARD_CLIP ? firstElement.getLength() : 0;
         final int trailingHardClips = lastElement.getOperator() == CigarOperator.HARD_CLIP ? lastElement.getLength() : 0;
 
-        int readPos = leadingHardClips + AlignmentUtils.calcAlignmentByteArrayOffset(read.getCigar(), offset.getLeft(), false, 0, 0);
+        int readPos = leadingHardClips + offset.getLeft();
         final int numAlignedBases = AlignmentUtils.getNumAlignedBasesCountingSoftClips( read );
         final int numOriginalBases = numAlignedBases + leadingHardClips + trailingHardClips;
 
