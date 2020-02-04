@@ -207,7 +207,7 @@ public final class ReadUtilsUnitTest extends GATKBaseTest {
         read.setCigar("3M414N1D73M");
 
         final int result = ReadUtils.getReadCoordinateForReferenceCoordinate(read, 9392).getLeft();
-        Assert.assertEquals(result, 2);
+        Assert.assertEquals(result, 3);
     }
 
     @Test
