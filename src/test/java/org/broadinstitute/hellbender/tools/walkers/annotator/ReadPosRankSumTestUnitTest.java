@@ -28,6 +28,7 @@ public final class ReadPosRankSumTestUnitTest extends GATKBaseTest {
 
     private static final Allele REF = Allele.create("T", true);
     private static final Allele ALT = Allele.create("A", false);
+    private static final Allele ALT_INSERTION = Allele.create("TTTTT", false);
 
     private VariantContext makeVC(final long position) {
         final double[] genotypeLikelihoods1 = {30,0,190};
@@ -126,19 +127,22 @@ public final class ReadPosRankSumTestUnitTest extends GATKBaseTest {
         final int start = 100;
         read.setPosition("CONTIG", start);
 
-        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start + 20).getAsDouble(), 10.0);
-        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start + 19).getAsDouble(), 10.0);
+        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, makeVC(start + 20)).getAsDouble(), 10.0);
+        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, makeVC(start + 19)).getAsDouble(), 10.0);
     }
 
     @Test
     public void testLeadingInsertion(){
+
+        final int start = 100;
+        final VariantContext vc = new VariantContextBuilder().alleles(Arrays.asList(REF, ALT_INSERTION)).chr(CONTIG).start(start-1).stop(start-1).make();
+
         final Cigar cigar = TextCigarCodec.decode("10I10M");
         final GATKRead read = ArtificialReadUtils.createArtificialRead(cigar);
-        final int start = 100;
+
         read.setPosition("CONTIG", start);
 
-        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start).getAsDouble(), 10.0);
-        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start - 1).getAsDouble(), 10.0);
+        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, vc).getAsDouble(), 0.0);
     }
 
     //Basic aligned read

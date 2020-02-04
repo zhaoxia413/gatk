@@ -44,7 +44,7 @@ public class BaseQuality extends PerAlleleAnnotation implements StandardMutectAn
     }
 
     public static OptionalInt getBaseQuality(final GATKRead read, final VariantContext vc) {
-        final OptionalDouble result = BaseQualityRankSumTest.getReadBaseQuality(read, vc.getStart());
+        final OptionalDouble result = BaseQualityRankSumTest.getReadBaseQuality(read, vc);
         return result.isPresent() ? OptionalInt.of((int) FastMath.round(result.getAsDouble())) : OptionalInt.empty();
     }
 }
