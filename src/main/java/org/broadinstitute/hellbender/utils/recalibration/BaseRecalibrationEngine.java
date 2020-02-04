@@ -341,9 +341,15 @@ public final class BaseRecalibrationEngine implements Serializable {
             }
             final Pair<Integer, CigarOperator> featureStartAndOperatorOnRead = ReadUtils.getReadCoordinateForReferenceCoordinate(read, knownSite.getStart());
             int featureStartOnRead = featureStartAndOperatorOnRead.getLeft() == ReadUtils.CLIPPING_GOAL_NOT_REACHED ? 0 : featureStartAndOperatorOnRead.getLeft();
+            if (featureStartAndOperatorOnRead.getRight() == CigarOperator.DELETION) {
+                featureStartOnRead--;
+            }
 
             final Pair<Integer, CigarOperator> featureEndAndOperatorOnRead = ReadUtils.getReadCoordinateForReferenceCoordinate(read, knownSite.getEnd());
             int featureEndOnRead = featureEndAndOperatorOnRead.getLeft() == ReadUtils.CLIPPING_GOAL_NOT_REACHED ? readLength : featureEndAndOperatorOnRead.getLeft();
+            if (featureEndAndOperatorOnRead.getRight() == CigarOperator.DELETION) {
+                featureEndOnRead--;
+            }
 
             if( featureStartOnRead > readLength ) {
                 featureStartOnRead = featureEndOnRead = readLength;
