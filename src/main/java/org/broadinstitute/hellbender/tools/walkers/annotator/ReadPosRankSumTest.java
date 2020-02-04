@@ -75,7 +75,7 @@ public final class ReadPosRankSumTest extends RankSumTest implements StandardAnn
         final int trailingHardClips = lastElement.getOperator() == CigarOperator.HARD_CLIP ? lastElement.getLength() : 0;
 
         final int leftDistance = leadingHardClips + offset.getLeft();
-        final int rightDistance = read.getLength() + trailingHardClips - offset.getLeft();
+        final int rightDistance = read.getLength() - offset.getLeft() + trailingHardClips;
         return OptionalDouble.of(Math.min(leftDistance, rightDistance));
     }
 }

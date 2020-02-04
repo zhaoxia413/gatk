@@ -78,7 +78,7 @@ public final class ReadPosRankSumTestUnitTest extends GATKBaseTest {
         final String zScoreStr = String.format("%.3f", zScore);
         Assert.assertEquals(annotate.get(key), zScoreStr);
         
-        final long positionEnd = 8L;  //past middle
+        final long positionEnd = 9L;  //past middle
         final VariantContext vcEnd= makeVC(positionEnd);
 
         //Note: past the middle of the read we compute the position from the end.
