@@ -116,7 +116,7 @@ public final class ReadPosRankSumTestUnitTest extends GATKBaseTest {
         final GATKRead read = ArtificialReadUtils.createArtificialRead(cigar);
         read.setMappingQuality(mappingQuality);
         read.setPosition(CONTIG, start);
-        Assert.assertEquals(readPosRankSumTest.isUsableRead(read, refLoc), isUsable);
+        Assert.assertEquals(readPosRankSumTest.isUsableRead(read, makeVC(refLoc)), isUsable);
     }
 
     @Test
@@ -128,6 +128,17 @@ public final class ReadPosRankSumTestUnitTest extends GATKBaseTest {
 
         Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start + 20).getAsDouble(), 10.0);
         Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start + 19).getAsDouble(), 10.0);
+    }
+
+    @Test
+    public void testLeadingInsertion(){
+        final Cigar cigar = TextCigarCodec.decode("10I10M");
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(cigar);
+        final int start = 100;
+        read.setPosition("CONTIG", start);
+
+        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start).getAsDouble(), 10.0);
+        Assert.assertEquals(ReadPosRankSumTest.getReadPosition(read, start - 1).getAsDouble(), 10.0);
     }
 
     //Basic aligned read

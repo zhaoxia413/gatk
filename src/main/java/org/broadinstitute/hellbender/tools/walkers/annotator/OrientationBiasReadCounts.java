@@ -77,7 +77,7 @@ public final class OrientationBiasReadCounts extends GenotypeAnnotation implemen
                 .collect(Collectors.toMap(a -> a, a -> new MutableInt(0)));
 
         Utils.stream(likelihoods.bestAllelesBreakingTies(g.getSampleName()))
-                .filter(ba -> ba.isInformative() && isUsableRead(ba.evidence) && BaseQualityRankSumTest.getReadBaseQuality(ba.evidence, vc.getStart()).orElse(0) >= MINIMUM_BASE_QUALITY)
+                .filter(ba -> ba.isInformative() && isUsableRead(ba.evidence) && BaseQualityRankSumTest.getReadBaseQuality(ba.evidence, vc).orElse(0) >= MINIMUM_BASE_QUALITY)
                 .forEach(ba -> (ReadUtils.isF2R1(ba.evidence) ? f2r1Counts : f1r2Counts).get(ba.allele).increment());
 
         final int[] f1r2 = vc.getAlleles().stream().mapToInt(a -> f1r2Counts.get(a).intValue()).toArray();

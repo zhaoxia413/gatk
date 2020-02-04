@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.tools.walkers.annotator;
 import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
+import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -39,19 +40,19 @@ public final class ReadPosRankSumTest extends RankSumTest implements StandardAnn
     public List<String> getKeyNames() { return Collections.singletonList(GATKVCFConstants.READ_POS_RANK_SUM_KEY); }
 
     @Override
-    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc) {
-        return getReadPosition(read, refLoc);
+    protected OptionalDouble getElementForRead(final GATKRead read, final VariantContext vc) {
+        return getReadPosition(read, vc);
     }
 
     @Override
-    public boolean isUsableRead(final GATKRead read, final int refLoc) {
+    public boolean isUsableRead(final GATKRead read, final VariantContext vc) {
         Utils.nonNull(read);
-        return super.isUsableRead(read, refLoc) && read.getSoftEnd() >= refLoc;
+        return super.isUsableRead(read, vc) && read.getSoftEnd() >= vc.getStart();
     }
 
-    public static OptionalDouble getReadPosition(final GATKRead read, final int refLoc) {
+    public static OptionalDouble getReadPosition(final GATKRead read, final VariantContext vc) {
         Utils.nonNull(read);
-        final Pair<Integer, CigarOperator> offset = ReadUtils.getReadCoordinateForReferenceCoordinate(read, refLoc);
+        final Pair<Integer, CigarOperator> offset = ReadUtils.getReadCoordinateForReferenceCoordinate(read, vc.getStart());
         if ( offset.getRight() == null || !offset.getRight().consumesReadBases() ) {
             return OptionalDouble.empty();
         }
