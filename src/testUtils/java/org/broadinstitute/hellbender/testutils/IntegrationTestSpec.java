@@ -146,11 +146,11 @@ public final class IntegrationTestSpec {
         String[] command = Utils.escapeExpressions(args);
         // run the executable
         boolean gotAnException = false;
-        try {
+        //try {
             final String now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
             System.out.println(String.format("[%s] Executing test %s:%s", now, testClass.getClass().getSimpleName(), testName));
             testClass.runCommandLine(command);
-        } catch (Exception e) {
+        /*} catch (Exception e) {
             gotAnException = true;
             if (expectedException == null) {
                 // we didn't expect an exception but we got one :-(
@@ -169,7 +169,7 @@ public final class IntegrationTestSpec {
                 }
                 Assert.fail(message);
             }
-        }
+        }*/
 
         if (expectedException != null && !gotAnException) {
             // we expected an exception but didn't see it
