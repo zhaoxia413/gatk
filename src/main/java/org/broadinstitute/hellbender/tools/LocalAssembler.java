@@ -1,6 +1,5 @@
 package org.broadinstitute.hellbender.tools;
 
-import htsjdk.samtools.util.SequenceUtil;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
@@ -642,6 +641,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                 if ( lastContig.isCyclic() ) {
                     addTraversal(cyclicList, traversalSet);
                 } else {
+                    cyclicList.remove(cyclicList.size() - 1);
                     traverse(lastContig, null, cyclicList, contigTransitsMap, readPaths, traversalSet);
                 }
             }
