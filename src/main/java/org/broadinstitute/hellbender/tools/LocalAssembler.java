@@ -36,7 +36,10 @@ public class LocalAssembler extends MultiplePassReadWalker {
     private String refImage;
 
     @Override public List<ReadFilter> getDefaultReadFilters() {
-        return Collections.singletonList(ReadFilterLibrary.PRIMARY_LINE);
+        final List<ReadFilter> readFilters = new ArrayList<>(super.getDefaultReadFilters());
+        readFilters.add(ReadFilterLibrary.PRIMARY_LINE);
+        readFilters.add(ReadFilterLibrary.NOT_DUPLICATE);
+        return readFilters;
     }
 
     @Override public void traverseReads() {
