@@ -84,9 +84,6 @@ public class DistantMateSortedPrinter extends ReadWalker {
 
     @Override
     public void closeTool() {
-        if ( pendingReads.size() > 0 ) {
-            logger.info("Failed to pair " + pendingReads.size() + " reads.");
-        }
         if ( outputWriter != null ) {
             outputWriter.close();
         }

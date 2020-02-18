@@ -31,7 +31,6 @@ public class PairWalker extends ReadWalker {
 
     @Override public List<ReadFilter> getDefaultReadFilters() {
         final List<ReadFilter> readFilters = new ArrayList<>(super.getDefaultReadFilters());
-        readFilters.add(ReadFilterLibrary.PAIRED);
         readFilters.add(ReadFilterLibrary.PRIMARY_LINE);
         readFilters.add(ReadFilterLibrary.NOT_DUPLICATE);
         return readFilters;
@@ -41,11 +40,25 @@ public class PairWalker extends ReadWalker {
     public boolean requiresReads() { return true; }
 
     @Override
+    public void onTraversalStart() {
+        final List<SimpleInterval> intervals =
+                intervalArgumentCollection.getIntervals(getHeaderForReads().getSequenceDictionary());
+        if ( intervals.size() > 0 ) {
+            final SimpleInterval paddedInterval = intervals.get(0);
+            final int padding = intervalArgumentCollection.getIntervalPadding();
+            final int start = paddedInterval.getStart() + padding;
+            final int end = paddedInterval.getEnd() - padding;
+            targetInterval = new SimpleInterval(paddedInterval.getContig(), start, end);
+        }
+    }
+
+    @Override
     public void apply( final GATKRead read,
                        final ReferenceContext referenceContext,
                        final FeatureContext featureContext ) {
         if ( targetInterval == null || targetInterval.overlaps(read) ) {
-            store(read, true);
+            if ( !read.isPaired() ) apply(read, null);
+            else store(read, true);
         } else {
             final Locatable mateLocation = getMateLocation(read);
             if ( targetInterval.overlaps(mateLocation) ) {
@@ -58,18 +71,31 @@ public class PairWalker extends ReadWalker {
 
     @Override
     public Object onTraversalSuccess() {
-        System.out.println("There were " + pairBufferSet.size() + " unpaired reads.");
+        int nUnpaired = 0;
+        for ( final PairBuffer pb : pairBufferSet ) {
+            if ( pb.isInInterval() ) {
+                apply(pb.getRead1(), pb.getRead2());
+                nUnpaired += 1;
+            }
+        }
+        if ( nUnpaired > 0 ) {
+            logger.info("There were " + nUnpaired + " incomplete pairs.");
+        }
         return null;
     }
 
     public void apply( final GATKRead read, final GATKRead mate ) {
-        //System.out.println(read.getName());
+        System.out.println(read.commonToString());
+        System.out.println(mate.commonToString());
     }
 
     private void store( final GATKRead read, final boolean inInterval ) {
         final PairBuffer pb = pairBufferSet.findOrAdd(new PairBuffer(read.getName()), k -> (PairBuffer)k);
-        if ( pb.add(read, inInterval) ) {
-            apply( pb.getRead1(), pb.getRead2() );
+        pb.add(read, inInterval);
+        if ( pb.isComplete() ) {
+            if ( pb.isInInterval() ) {
+                apply(pb.getRead1(), pb.getRead2());
+            }
             pairBufferSet.remove(pb);
         }
     }
@@ -94,14 +120,16 @@ public class PairWalker extends ReadWalker {
             inInterval = false;
         }
 
+        public boolean isComplete() { return read1 != null && read2 != null; }
+        public boolean isInInterval() { return inInterval; }
         public GATKRead getRead1() { return read1; }
         public GATKRead getRead2() { return read2; }
 
-        public boolean add( final GATKRead readArg, final boolean inInterval ) {
+        public void add( final GATKRead readArg, final boolean inInterval ) {
             final GATKRead read = DistantMateSortedPrinter.untangleRead(readArg);
             if ( read.isFirstOfPair() ) read1 = read;
             else read2 = read;
-            return (this.inInterval |= inInterval) && read1 != null && read2 != null;
+            this.inInterval |= inInterval;
         }
 
         @Override public boolean equals( final Object obj ) {
