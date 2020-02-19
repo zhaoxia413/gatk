@@ -85,19 +85,27 @@ public class PairWalker extends ReadWalker {
     }
 
     public void apply( final GATKRead read, final GATKRead mate ) {
-        System.out.println(read.commonToString());
-        System.out.println(mate.commonToString());
+        System.out.println((read == null ? "NULL" : read.commonToString()) + "|" + (mate == null ? "NULL" : mate.commonToString()));
     }
 
     private void store( final GATKRead read, final boolean inInterval ) {
         final PairBuffer pb = pairBufferSet.findOrAdd(new PairBuffer(read.getName()), k -> (PairBuffer)k);
         pb.add(read, inInterval);
         if ( pb.isComplete() ) {
-            if ( pb.isInInterval() ) {
+            if ( pb.isInInterval() && (!pb.hasDistantMate() || !isDuplicative(pb)) ) {
                 apply(pb.getRead1(), pb.getRead2());
             }
             pairBufferSet.remove(pb);
         }
+    }
+
+    private boolean isDuplicative( final PairBuffer pb ) {
+        final GATKRead read1 = pb.getRead1();
+        final GATKRead read2 = pb.getRead2();
+        if ( targetInterval.overlaps(read1) && targetInterval.overlaps(read2) ) {
+            return read1.getStart() < read2.getStart() ? pb.read1IsDistant() : pb.read2IsDistant();
+        }
+        return false;
     }
 
     private static SimpleInterval getMateLocation( final GATKRead read ) {
@@ -112,23 +120,36 @@ public class PairWalker extends ReadWalker {
         private GATKRead read1;
         private GATKRead read2;
         private boolean inInterval;
+        private boolean distantMate1;
+        private boolean distantMate2;
 
         public PairBuffer( final String qName ) {
             this.qName = qName;
             read1 = null;
             read2 = null;
             inInterval = false;
+            distantMate1 = false;
+            distantMate2 = false;
         }
 
         public boolean isComplete() { return read1 != null && read2 != null; }
         public boolean isInInterval() { return inInterval; }
+        public boolean hasDistantMate() { return distantMate1 || distantMate2; }
+        public boolean read1IsDistant() { return distantMate1; }
+        public boolean read2IsDistant() { return distantMate2; }
         public GATKRead getRead1() { return read1; }
         public GATKRead getRead2() { return read2; }
 
         public void add( final GATKRead readArg, final boolean inInterval ) {
             final GATKRead read = DistantMateSortedPrinter.untangleRead(readArg);
-            if ( read.isFirstOfPair() ) read1 = read;
-            else read2 = read;
+            if ( read.isFirstOfPair() ) {
+                read1 = read;
+                if ( read != readArg ) distantMate1 = true;
+            }
+            else {
+                read2 = read;
+                if ( read != readArg ) distantMate2 = true;
+            }
             this.inInterval |= inInterval;
         }
 
