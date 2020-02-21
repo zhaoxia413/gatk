@@ -27,7 +27,7 @@ import java.util.Map;
         programGroup = ReadDataManipulationProgramGroup.class
 )
 @DocumentedFeature
-public class DistantMateSortedPrinter extends ReadWalker {
+public class PrintDistantMates extends ReadWalker {
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="Write output to this file")

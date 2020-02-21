@@ -4,15 +4,16 @@ import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
+import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.CoverageAnalysisProgramGroup;
-import org.broadinstitute.hellbender.engine.MultiplePassReadWalker;
-import org.broadinstitute.hellbender.engine.filters.ReadFilter;
-import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.tools.walkers.PairWalker;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.collections.HopscotchSet;
-import org.broadinstitute.hellbender.utils.bwa.BwaMemAligner;
-import org.broadinstitute.hellbender.utils.bwa.BwaMemAlignment;
-import org.broadinstitute.hellbender.utils.bwa.BwaMemIndex;
+import org.broadinstitute.hellbender.utils.minimap2.MiniMap2Aligner;
+import org.broadinstitute.hellbender.utils.minimap2.MiniMap2Alignment;
+import org.broadinstitute.hellbender.utils.minimap2.MiniMap2Index;
+import org.broadinstitute.hellbender.utils.read.GATKRead;
 
 import java.io.BufferedWriter;
 import java.io.FileWriter;
@@ -27,24 +28,35 @@ import java.util.*;
         programGroup = CoverageAnalysisProgramGroup.class
 )
 @BetaFeature
-public class LocalAssembler extends MultiplePassReadWalker {
+public class LocalAssembler extends PairWalker {
     public static final byte QMIN = 25;
     public static final int MIN_THIN_OBS = 4;
     public static final int MIN_GAPFILL_COUNT = 3;
 
-    @Argument(fullName = "ref-image", doc = "The BWA memory image for the reference")
-    private String refImage;
+    @Argument(fullName = "ref-index", doc = "The MiniMap2 index for the reference")
+    private String refIndex;
+    @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
+            shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
+            doc="Write output to this file")
+    public String output;
 
-    @Override public List<ReadFilter> getDefaultReadFilters() {
-        final List<ReadFilter> readFilters = new ArrayList<>(super.getDefaultReadFilters());
-        readFilters.add(ReadFilterLibrary.PRIMARY_LINE);
-        readFilters.add(ReadFilterLibrary.NOT_DUPLICATE);
-        return readFilters;
+    private final List<GATKRead> reads = new ArrayList<>();
+
+    @Override public boolean requiresIntervals() { return true; }
+
+    @Override public void apply( final GATKRead read, final GATKRead mate ) {
+        reads.add(read);
+        reads.add(mate);
     }
 
-    @Override public void traverseReads() {
-        final KmerSet<KmerAdjacency> kmerAdjacencySet = new KmerSet<>(1000000);
-        final int nReads = kmerizeReadsPass(kmerAdjacencySet);
+    @Override public void applyUnpaired( final GATKRead read ) {
+        reads.add(read);
+    }
+
+    @Override public Object onTraversalSuccess() {
+        final int regionSize = getTraversalIntervals().stream().mapToInt(SimpleInterval::size).sum();
+        final KmerSet<KmerAdjacency> kmerAdjacencySet = new KmerSet<>(10 * regionSize);
+        kmerizeReadsPass(kmerAdjacencySet);
         List<ContigImpl> contigs = buildContigs(kmerAdjacencySet);
         connectContigs(contigs);
 
@@ -52,7 +64,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         weldPipes(contigs);
         markComponents(contigs);
 
-        final List<Path> readPaths = new ArrayList<>(nReads);
+        final List<Path> readPaths = new ArrayList<>(reads.size());
         final Map<Contig, GapFill> gapFillMap = new HashMap<>();
         pathReadsPass(kmerAdjacencySet, readPaths, gapFillMap);
 
@@ -61,7 +73,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         connectContigs(contigs);
         removeThinContigs(contigs, kmerAdjacencySet);
         weldPipes(contigs);
-        final int nComponents = markComponents(contigs);
+        markComponents(contigs);
 
         readPaths.clear();
         gapFillMap.clear();
@@ -73,33 +85,30 @@ public class LocalAssembler extends MultiplePassReadWalker {
         final Map<Contig,List<TransitPairCount>> contigTransitsMap = collectTransitPairCounts(contigs, readPaths);
         final List<Traversal> allTraversals = traverseAllPaths(contigs, contigTransitsMap, readPaths);
 
-        final List<List<BwaMemAlignment>> alignments;
+        final List<List<MiniMap2Alignment>> alignments;
         final List<String> refNames;
-        try ( final BwaMemIndex bwaIndex = new BwaMemIndex(refImage) ) {
-            refNames = bwaIndex.getReferenceContigNames();
-            final BwaMemAligner aligner = new BwaMemAligner(bwaIndex);
-            aligner.setIntraCtgOptions();
+        try ( final MiniMap2Index mm2Index = new MiniMap2Index(refIndex) ) {
+            refNames = mm2Index.getRefNames();
+            final MiniMap2Aligner aligner = new MiniMap2Aligner(mm2Index, MiniMap2Aligner.Preset.ASM20);
             alignments = aligner.alignSeqs(allTraversals, trv -> trv.getSequence().getBytes());
         }
 
-        contigs.sort(Comparator.comparingInt(ContigImpl::getId));
-        writeDOT(contigs, "assembly.dot");
-        writeContigs(contigs);
-        writePaths(readPaths);
-        writeAlignments(allTraversals, alignments, refNames, "assembly.sam");
-        writeTraversals(allTraversals, "assembly.fa");
-        System.out.println("There are " + nComponents + " assembly graph components.");
+//        contigs.sort(Comparator.comparingInt(ContigImpl::getId));
+//        writeDOT(contigs, "assembly.dot");
+//        writeContigs(contigs);
+//        writePaths(readPaths);
+        writeAlignments(allTraversals, alignments, refNames, output);
+//        writeTraversals(allTraversals, "assembly.fa");
+//        System.out.println("There are " + nComponents + " assembly graph components.");
+        return null;
     }
 
-    private int kmerizeReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-        final int[] nReads = new int[1];
-        forEachRead( (read, ref, feature) -> {
+    private void kmerizeReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+        for ( final GATKRead read : reads ) {
             final byte[] calls = read.getBasesNoCopy();
             final byte[] quals = read.getBaseQualitiesNoCopy();
             KmerAdjacencyImpl.kmerize(calls, quals, QMIN, kmerAdjacencySet);
-            nReads[0] += 1;
-        });
-        return nReads[0];
+        }
     }
 
     private static List<ContigImpl> buildContigs( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
@@ -456,12 +465,12 @@ public class LocalAssembler extends MultiplePassReadWalker {
     private void pathReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet,
                                 final List<Path> paths,
                                 final Map<Contig, GapFill> gapFillMap ) {
-        forEachRead( (read, ref, feature) -> {
-            final Path path = new Path(read.getBasesNoCopy(), read.getBaseQualitiesNoCopy(), kmerAdjacencySet);
+        for ( final GATKRead read : reads ) {
+            final Path path = new Path(read.getBasesNoCopy(), kmerAdjacencySet);
             paths.add(path);
             final List<PathPart> parts = path.getParts();
             final int nParts = parts.size();
-            if ( nParts <= 1 ) return;
+            if ( nParts <= 1 ) continue;
             for ( int idx = 1; idx < nParts - 1; ++idx ) {
                 final PathPart pathPart = parts.get(idx);
                 if ( pathPart.isGap() ) {
@@ -513,7 +522,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
                     gapFill.addSequence(subSeq.toString(), null);
                 }
             }
-        });
+        }
     }
 
     private static void fillGaps( final Map<Contig, GapFill> gapFillMap,
@@ -744,7 +753,7 @@ public class LocalAssembler extends MultiplePassReadWalker {
         }
         return true;
     }
-
+/*
     private static void writeDOT( final List<ContigImpl> contigs,
                                   final String fileName ) {
         try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
@@ -836,31 +845,37 @@ public class LocalAssembler extends MultiplePassReadWalker {
             throw new GATKException("Failed to write assembly sam file.", ioe);
         }
     }
+*/
     private static void writeAlignments( final List<Traversal> traversals,
-                                         final List<List<BwaMemAlignment>> allAlignments,
+                                         final List<List<MiniMap2Alignment>> allAlignments,
                                          final List<String> refNames,
                                          final String fileName ) {
         try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
             final int nTraversals = traversals.size();
             for ( int idx = 0; idx != nTraversals; ++idx ) {
-                final List<BwaMemAlignment> alignments = allAlignments.get(idx);
+                final List<MiniMap2Alignment> alignments = allAlignments.get(idx);
                 final int nAlignments = alignments.size();
                 for ( int alignmentIdx = 0; alignmentIdx != nAlignments; ++alignmentIdx ) {
-                    final BwaMemAlignment alignment = alignments.get(alignmentIdx);
-                    writer.write(traversals.get(idx).getName());
-                    writer.write('\t');
-                    writer.write(Integer.toString(alignment.getSamFlag()));
+                    final MiniMap2Alignment alignment = alignments.get(alignmentIdx);
+                    final Traversal traversal = traversals.get(idx);
+                    writer.write(traversal.getName());
                     writer.write('\t');
                     final int refId = alignment.getRefId();
+                    final int samFlag = (alignment.isRevStrand() ? 16 : 0) +
+                                        (alignmentIdx == 0 ? 0 : 2048) +
+                                        (refId >= 0 ? 0 : 4);
+                    writer.write(Integer.toString(samFlag));
+                    writer.write('\t');
                     writer.write(refId >= 0 ? refNames.get(refId) : "*");
                     writer.write('\t');
                     writer.write(Integer.toString(alignment.getRefStart()));
                     writer.write('\t');
-                    writer.write(Integer.toString(alignment.getMapQual()));
+                    writer.write(Integer.toString(alignment.getMapQ()));
                     writer.write('\t');
                     writer.write(alignment.getCigar());
-                    writer.write("\t*\t0\t0\t*\t*\tNM:Z:");
-                    writer.write(Integer.toString(alignment.getNMismatches()));
+                    writer.write("\t*\t0\t0\t");
+                    writer.write(traversal.getSequence());
+                    writer.write("\t*");
                     writer.newLine();
                 }
             }
@@ -1614,7 +1629,6 @@ public class LocalAssembler extends MultiplePassReadWalker {
         private final List<PathPart> parts;
 
         public Path( final byte[] calls,
-                     final byte[] quals,
                      final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
             parts = new ArrayList<>();
             long kVal = 0;
