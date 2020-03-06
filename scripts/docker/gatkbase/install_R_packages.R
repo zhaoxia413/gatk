@@ -15,10 +15,12 @@ InstallPackageFromArchive = function(packageName, packageURL) {
     }
 }
 
+repos <- c("http://cran.mtu.edu")
+install.packages(c("bitops"), repos = repos, clean = TRUE)
+InstallPackageFromArchive("caTools", "https://cran.r-project.org/src/contrib/Archive/caTools/caTools_1.17.tar.gz")
 dependencies = c("gplots",
                  "digest", "gtable", "MASS", "plyr", "reshape2", "scales", "tibble", "lazyeval", # for ggplot2
                  "tidyselect", "BH", "plogr")     # for dplyr
-repos <- c("http://cran.mtu.edu")
 install.packages(dependencies, repos = repos, clean = TRUE)
 
 InstallPackageFromArchive("getopt", "http://cran.r-project.org/src/contrib/Archive/getopt/getopt_1.20.0.tar.gz")

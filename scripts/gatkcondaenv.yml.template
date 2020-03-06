@@ -14,7 +14,7 @@ dependencies:
 - readline=6.2=2
 - setuptools=36.4.0=py36_1
 - sqlite=3.13.0=0
-- anaconda::tensorflow=1.12.0=mkl_py36h2b2bbaf_0
+- anaconda::tensorflow=1.12.0=mkl_py36h69b6ba0_0
 - tk=8.5.18=0
 - wheel=0.29.0=py36_0
 - xz=5.2.3=0

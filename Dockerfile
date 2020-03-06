@@ -1,5 +1,5 @@
 # Using OpenJDK 8
-FROM broadinstitute/gatk:gatkbase-2.2.0
+FROM mwalker174/gatk:gatkbase-2.2.0-cuda-9.2
 
 # Location of the unzipped gatk bundle files
 ARG ZIPPATH
