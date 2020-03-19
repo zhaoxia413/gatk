@@ -1,9 +1,6 @@
 package org.broadinstitute.hellbender.tools;
 
-import htsjdk.samtools.Cigar;
-import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.SAMFlag;
-import htsjdk.samtools.TextCigarCodec;
 import htsjdk.samtools.util.SequenceUtil;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.BetaFeature;
@@ -12,18 +9,14 @@ import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.CoverageAnalysisProgramGroup;
-import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.tools.spark.sv.utils.SvCigarUtils;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.minimap2.MiniMap2Aligner;
 import org.broadinstitute.hellbender.utils.minimap2.MiniMap2Alignment;
 import org.broadinstitute.hellbender.utils.minimap2.MiniMap2Index;
-import org.broadinstitute.hellbender.utils.read.CigarUtils;
 
 import java.io.*;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 @DocumentedFeature
@@ -42,9 +35,6 @@ public class LocalAssemblyMapper extends CommandLineProgram {
     @Argument(fullName = "ref-index", doc = "The MiniMap2 index for the reference")
     private String refIndex;
 
-    @Argument(fullName = "sv-discovery-mode", doc = "If true, only output contigs with supplemental alignments")
-    private boolean svDiscoveryMode = false;
-
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="Write output to this file")
@@ -58,7 +48,6 @@ public class LocalAssemblyMapper extends CommandLineProgram {
             refNames = mm2Index.getRefNames();
             try ( final BufferedReader listRdr = new BufferedReader(new FileReader(inputList)) ) {
                 String fileName;
-                long tigId = 0;
                 try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(outputName)) ) {
                     while ( (fileName = listRdr.readLine()) != null ) {
                         logger.info(fileName + " being processed");
@@ -95,19 +84,6 @@ public class LocalAssemblyMapper extends CommandLineProgram {
                                     final String contigName = eventName + contigId;
                                     final List<MiniMap2Alignment> alignments = allAlignments.get(contigId);
                                     final int nAlignments = alignments.size();
-                                    if ( svDiscoveryMode ) {
-                                        boolean foundSupplementalAlignment = false;
-                                        int supplementalBit = SAMFlag.SUPPLEMENTARY_ALIGNMENT.intValue();
-                                        for ( final MiniMap2Alignment alignment : alignments ) {
-                                            if ( (alignment.getSAMFlag() & supplementalBit) != 0 ) {
-                                                foundSupplementalAlignment = true;
-                                                break;
-                                            }
-                                        }
-                                        if ( !foundSupplementalAlignment ) {
-                                            continue;
-                                        }
-                                    }
                                     if ( nAlignments == 0 ) {
                                         writer.write(contigName + "\t" + SAMFlag.READ_UNMAPPED.intValue() +
                                                 "\t*\t0\t255\t*\t*\t0\t0\t" + contigCalls.get(contigId) + "\t*\n");
