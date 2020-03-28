@@ -8,19 +8,18 @@ import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.CoverageAnalysisProgramGroup;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.tools.spark.sv.utils.SVFastqUtils;
 import org.broadinstitute.hellbender.tools.walkers.PairWalker;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.collections.HopscotchSet;
-import org.broadinstitute.hellbender.utils.minimap2.MiniMap2Aligner;
-import org.broadinstitute.hellbender.utils.minimap2.MiniMap2Alignment;
-import org.broadinstitute.hellbender.utils.minimap2.MiniMap2Index;
+import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 
 import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.util.*;
+import java.util.zip.GZIPOutputStream;
 
 @DocumentedFeature
 @CommandLineProgramProperties(
@@ -57,9 +56,11 @@ public class LocalAssembler extends PairWalker {
     }
 
     @Override public Object onTraversalSuccess() {
+        super.onTraversalSuccess(); // flush any incomplete pairs
+
         final int regionSize = getTraversalIntervals().stream().mapToInt(SimpleInterval::size).sum();
         final KmerSet<KmerAdjacency> kmerAdjacencySet = new KmerSet<>(10 * regionSize);
-        kmerizeReadsPass(kmerAdjacencySet);
+        kmerizeReads(kmerAdjacencySet);
         List<ContigImpl> contigs = buildContigs(kmerAdjacencySet);
         connectContigs(contigs);
 
@@ -67,41 +68,35 @@ public class LocalAssembler extends PairWalker {
         weldPipes(contigs);
         markComponents(contigs);
 
-        final List<Path> readPaths = new ArrayList<>(reads.size());
-        final Map<Contig, GapFill> gapFillMap = new HashMap<>();
-        pathReadsPass(kmerAdjacencySet, readPaths, gapFillMap);
-
-        fillGaps(gapFillMap, kmerAdjacencySet);
-        contigs = buildContigs(kmerAdjacencySet);
-        connectContigs(contigs);
-        removeThinContigs(contigs, kmerAdjacencySet);
-        weldPipes(contigs);
-        markComponents(contigs);
-
-        readPaths.clear();
-        gapFillMap.clear();
-        pathReadsPass(kmerAdjacencySet, readPaths, gapFillMap);
+        if ( fillGaps(kmerAdjacencySet) ) {
+            contigs = buildContigs(kmerAdjacencySet);
+            connectContigs(contigs);
+            while ( removeThinContigs(contigs, kmerAdjacencySet) ) {}
+            weldPipes(contigs);
+            markComponents(contigs);
+        }
 
         markCycles(contigs);
         markSNVBranches(contigs);
 
+        final List<Path> readPaths = pathReads(kmerAdjacencySet);
         final Map<Contig,List<TransitPairCount>> contigTransitsMap = collectTransitPairCounts(contigs, readPaths);
         final List<Traversal> allTraversals = traverseAllPaths(contigs, contigTransitsMap, readPaths);
         writeTraversals(allTraversals, output + ".traversals.fa");
 
         contigs.sort(Comparator.comparingInt(ContigImpl::getId));
         writeDOT(contigs, output + ".assembly.dot");
-        writeContigs(contigs, output + ".contigs.txt");
-        writePaths(readPaths, output + ".paths.txt");
-        writeReads(reads, output + ".reads.fastq");
+        writeContigs(contigs, output + ".contigs.txt.gz");
+        writePaths(readPaths, output + ".paths.txt.gz");
+        writeReads(reads, output + ".reads.fastq.gz");
         return null;
     }
 
-    private void kmerizeReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+    private void kmerizeReads( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
         for ( final GATKRead read : reads ) {
             final byte[] calls = read.getBasesNoCopy();
             final byte[] quals = read.getBaseQualitiesNoCopy();
-            KmerAdjacencyImpl.kmerize(calls, quals, QMIN, kmerAdjacencySet);
+            KmerAdjacency.kmerize(calls, quals, QMIN, kmerAdjacencySet);
         }
     }
 
@@ -456,12 +451,63 @@ public class LocalAssembler extends PairWalker {
         return cutData;
     }
 
-    private void pathReadsPass( final KmerSet<KmerAdjacency> kmerAdjacencySet,
-                                final List<Path> paths,
+    private boolean fillGaps( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+        final Map<String, Integer> gapFillCounts = new HashMap<>();
+
+        for ( final GATKRead read : reads ) {
+            final Path path = new Path(read.getBasesNoCopy(), kmerAdjacencySet);
+            final List<PathPart> parts = path.getParts();
+            final int lastIdx = parts.size() - 1;
+            for ( int idx = 1; idx < lastIdx; ++idx ) {
+                final PathPart pathPart = parts.get(idx);
+                if ( pathPart.isGap() ) {
+                    final char prevCall = parts.get(idx - 1).getLastCall();
+                    final char nextCall = parts.get(idx + 1).getFirstCall();
+                    String gapFill = prevCall + pathPart.getSequence().toString() + nextCall;
+                    final SequenceRC gapFillRC = new SequenceRC(gapFill);
+                    if ( gapFillRC.compareTo(gapFill) < 0 ) {
+                        gapFill = gapFillRC.toString();
+                    }
+                    gapFillCounts.merge(gapFill, 1, Integer::sum);
+                }
+            }
+        }
+
+        boolean newKmers = false;
+        for ( final Map.Entry<String, Integer> entry : gapFillCounts.entrySet() ) {
+            final int nObservations = entry.getValue();
+            if ( nObservations >= MIN_GAPFILL_COUNT ) {
+                KmerAdjacency.kmerize(entry.getKey(), nObservations, kmerAdjacencySet);
+                newKmers = true;
+            }
+        }
+
+        if ( newKmers ) {
+            for ( final KmerAdjacency kmerAdjacency : kmerAdjacencySet ) {
+                kmerAdjacency.setContig(null, 0);
+            }
+        }
+        return newKmers;
+    }
+
+/*
+    private void fillGaps( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+        final Map<Contig, GapFill> gapFillMap = new HashMap<>();
+
+        findGaps(kmerAdjacencySet, gapFillMap);
+
+        for ( final KmerAdjacency kmer : kmerAdjacencySet ) {
+            kmer.setContig(null, 0);
+        }
+        for ( final GapFill gapFill : gapFillMap.values() ) {
+            gapFill.apply(kmerAdjacencySet);
+        }
+    }
+
+    private void findGaps( final KmerSet<KmerAdjacency> kmerAdjacencySet,
                                 final Map<Contig, GapFill> gapFillMap ) {
         for ( final GATKRead read : reads ) {
             final Path path = new Path(read.getBasesNoCopy(), kmerAdjacencySet);
-            paths.add(path);
             final List<PathPart> parts = path.getParts();
             final int nParts = parts.size();
             if ( nParts <= 1 ) continue;
@@ -518,17 +564,7 @@ public class LocalAssembler extends PairWalker {
             }
         }
     }
-
-    private static void fillGaps( final Map<Contig, GapFill> gapFillMap,
-                                  final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
-        for ( final KmerAdjacency kmer : kmerAdjacencySet ) {
-            kmer.setContig(null, 0);
-        }
-        for ( final GapFill gapFill : gapFillMap.values() ) {
-            gapFill.apply(kmerAdjacencySet);
-        }
-    }
-
+*/
     private static void markSNVBranches( final List<ContigImpl> contigs ) {
         for ( final Contig contig : contigs ) {
             if ( contig.isSNVBranch() ) continue;
@@ -550,6 +586,14 @@ public class LocalAssembler extends PairWalker {
                 }
             }
         }
+    }
+
+    private List<Path> pathReads( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+        final List<Path> readPaths = new ArrayList<>(reads.size());
+        for ( final GATKRead read : reads ) {
+            readPaths.add(new Path(read.getBasesNoCopy(), kmerAdjacencySet));
+        }
+        return readPaths;
     }
 
     private static Map<Contig,List<TransitPairCount>> collectTransitPairCounts( final List<ContigImpl> contigs,
@@ -773,8 +817,12 @@ public class LocalAssembler extends PairWalker {
         }
     }
 
+    private static BufferedWriter makeGZFile( final String fileName ) throws IOException {
+        return new BufferedWriter(new OutputStreamWriter(new GZIPOutputStream(BucketUtils.createFile(fileName))));
+    }
+
     private static void writeContigs( final List<ContigImpl> contigs, final String fileName ) {
-        try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
+        try ( final BufferedWriter writer = makeGZFile(fileName) ) {
             for ( final Contig contig : contigs ) {
                 final List<Contig> predecessors = contig.getPredecessors();
                 final String predecessorDescription;
@@ -822,7 +870,7 @@ public class LocalAssembler extends PairWalker {
     }
 
     private static void writePaths( final List<Path> readPaths, final String fileName ) {
-        try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
+        try ( final BufferedWriter writer = makeGZFile(fileName) ) {
             final int nReads = readPaths.size();
             for ( int readId = 0; readId != nReads; ++readId ) {
                 final Path path = readPaths.get(readId);
@@ -835,7 +883,7 @@ public class LocalAssembler extends PairWalker {
     }
 
     private static void writeReads( final List<GATKRead> reads, final String fileName ) {
-        try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
+        try ( final BufferedWriter writer = makeGZFile(fileName) ) {
             for ( final GATKRead read : reads ) {
                 writer.write("@" + read.getName());
                 writer.write('\n');
@@ -944,6 +992,83 @@ public class LocalAssembler extends PairWalker {
             return sb.toString();
         }
 
+        public static void kmerize( final byte[] calls,
+                                    final byte[] quals,
+                                    final byte qMin,
+                                    final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+            int currentCount = 0;
+            long currentKVal = 0;
+            KmerAdjacency prevAdjacency = null;
+            KmerAdjacency currentAdjacency = null;
+            for ( int idx = 0; idx < calls.length; ++idx ) {
+                if ( quals[idx] <  qMin ) {
+                    if ( currentAdjacency != null ) {
+                        currentAdjacency.observe(prevAdjacency, null);
+                    }
+                    currentCount = 0;
+                    currentAdjacency = prevAdjacency = null;
+                    continue;
+                }
+                currentKVal <<= 2;
+                switch ( calls[idx] ) {
+                    case 'A': case 'a': break;
+                    case 'C': case 'c': currentKVal += 1; break;
+                    case 'G': case 'g': currentKVal += 2; break;
+                    case 'T': case 't': currentKVal += 3; break;
+                    default:
+                        if ( currentAdjacency != null ) {
+                            currentAdjacency.observe(prevAdjacency, null);
+                        }
+                        currentCount = 0;
+                        currentAdjacency = prevAdjacency = null;
+                        continue;
+                }
+                if ( ++currentCount >= KSIZE ) {
+                    final KmerAdjacency nextAdjacency = findOrAdd(currentKVal, kmerAdjacencySet);
+                    if ( currentAdjacency != null ) {
+                        currentAdjacency.observe(prevAdjacency, nextAdjacency);
+                    }
+                    prevAdjacency = currentAdjacency;
+                    currentAdjacency = nextAdjacency;
+                }
+            }
+            if ( currentAdjacency != null ) {
+                currentAdjacency.observe(prevAdjacency, null);
+            }
+        }
+
+        public static void kmerize( final String sequence,
+                                    final int nObservations,
+                                    final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
+            int currentCount = 0;
+            long currentKVal = 0;
+            int nObs = 0;
+            KmerAdjacency prevAdjacency = null;
+            KmerAdjacency currentAdjacency = null;
+            final int nCalls = sequence.length();
+            for ( int idx = 0; idx != nCalls; ++idx ) {
+                currentKVal <<= 2;
+                switch ( sequence.charAt(idx) ) {
+                    case 'A': case 'a': break;
+                    case 'C': case 'c': currentKVal += 1; break;
+                    case 'G': case 'g': currentKVal += 2; break;
+                    case 'T': case 't': currentKVal += 3; break;
+                }
+                if ( ++currentCount >= KSIZE ) {
+                    final KmerAdjacency nextAdjacency = findOrAdd(currentKVal, kmerAdjacencySet);
+                    if ( currentAdjacency != null ) {
+                        currentAdjacency.observe(prevAdjacency, nextAdjacency, nObs);
+                        nObs = nObservations;
+                    }
+                    prevAdjacency = currentAdjacency;
+                    currentAdjacency = nextAdjacency;
+                }
+            }
+            if ( currentAdjacency != null ) {
+                currentAdjacency.observe(prevAdjacency, null, 0);
+            }
+        }
+
         // Lookup table for reverse-complementing each possible byte value.
         // Each pair of bits represents a base, so you have to reverse bits pairwise and then invert all bits.
         // This is most quickly and easily done with a lookup table.
@@ -1046,7 +1171,7 @@ public class LocalAssembler extends PairWalker {
         private int predecessorMask; // bit mask of observed kmers preceding this one
         private int successorMask; // bit mask observed kmers following this one
         private Contig contig; // the contig that contains this Kmer
-        private int contigOffset;
+        private int contigOffset; // the offset within the contig where this kmer is found
         private int nObservations; // the reads in which this kmer was observed
         private final KmerAdjacencyRC rc; // the reverse-complement of this kmer
         private static final int[] COUNT_FOR_MASK =
@@ -1140,51 +1265,6 @@ public class LocalAssembler extends PairWalker {
                 }
             }
             nObservations += count;
-        }
-
-        public static void kmerize( final byte[] calls,
-                                    final byte[] quals,
-                                    final byte qMin,
-                                    final KmerSet<KmerAdjacency> kmerSet ) {
-            int currentCount = 0;
-            long currentKVal = 0;
-            KmerAdjacency prevAdjacency = null;
-            KmerAdjacency currentAdjacency = null;
-            for ( int idx = 0; idx < calls.length; ++idx ) {
-                if ( quals[idx] <  qMin ) {
-                    if ( currentAdjacency != null ) {
-                        currentAdjacency.observe(prevAdjacency, null);
-                    }
-                    currentCount = 0;
-                    currentAdjacency = prevAdjacency = null;
-                    continue;
-                }
-                currentKVal <<= 2;
-                switch ( calls[idx] ) {
-                    case 'A': case 'a': break;
-                    case 'C': case 'c': currentKVal += 1; break;
-                    case 'G': case 'g': currentKVal += 2; break;
-                    case 'T': case 't': currentKVal += 3; break;
-                    default:
-                        if ( currentAdjacency != null ) {
-                            currentAdjacency.observe(prevAdjacency, null);
-                        }
-                        currentCount = 0;
-                        currentAdjacency = prevAdjacency = null;
-                        continue;
-                }
-                if ( ++currentCount >= KSIZE ) {
-                    final KmerAdjacency nextAdjacency = findOrAdd(currentKVal, kmerSet);
-                    if ( currentAdjacency != null ) {
-                        currentAdjacency.observe(prevAdjacency, nextAdjacency);
-                    }
-                    prevAdjacency = currentAdjacency;
-                    currentAdjacency = nextAdjacency;
-                }
-            }
-            if ( currentAdjacency != null ) {
-                currentAdjacency.observe(prevAdjacency, null);
-            }
         }
     }
 
@@ -1389,7 +1469,7 @@ public class LocalAssembler extends PairWalker {
         @Override public String toString() { return rc.toString() + "RC"; }
     }
 
-    public static final class SequenceRC implements CharSequence {
+    public static final class SequenceRC implements CharSequence, Comparable<CharSequence> {
         private final int lenLess1;
         private final CharSequence sequence;
 
@@ -1401,7 +1481,7 @@ public class LocalAssembler extends PairWalker {
         @Override public int length() { return sequence.length(); }
         @Override public char charAt( final int index ) {
             final char result;
-            switch ( sequence.charAt(lenLess1 - index) ) {
+            switch ( Character.toUpperCase(sequence.charAt(lenLess1 - index)) ) {
                 case 'A': result = 'T'; break;
                 case 'C': result = 'G'; break;
                 case 'G': result = 'C'; break;
@@ -1414,6 +1494,19 @@ public class LocalAssembler extends PairWalker {
             return new StringBuilder(end - start).append(this, start, end).toString();
         }
         @Override public String toString() { return new StringBuilder(this).toString(); }
+
+        @Override public int compareTo( final CharSequence charSequence ) {
+            final int len1 = length();
+            final int len2 = charSequence.length();
+            final int cmpLen = Math.min(len1, len2);
+            for ( int idx = 0; idx != cmpLen; ++idx ) {
+                final char char1 = charAt(idx);
+                final char char2 = Character.toUpperCase(charSequence.charAt(idx));
+                if ( char1 > char2 ) return 1;
+                if ( char1 < char2 ) return -1;
+            }
+            return Integer.compare(len1, len2);
+        }
     }
 
     public static final class ListRC extends AbstractList<Contig> {
@@ -1437,36 +1530,34 @@ public class LocalAssembler extends PairWalker {
     public interface PathPart {
         Contig getContig();
         CharSequence getSequence();
-        void extendGap( final char call );
-        void extendPath();
+        void extend( final char call );
         int getStart();
         int getStop();
         boolean isGap();
         int getLength();
         PathPart rc();
+        char getFirstCall();
+        char getLastCall();
         default boolean startsAtBeginning() { return getStart() == 0; }
         default boolean stopsAtEnd() { return getStop() + Kmer.KSIZE - 1 == getContig().size(); }
     }
 
     public static final class PathPartGap implements PathPart {
-        private final StringBuilder sequence;
+        private final StringBuilder sequence = new StringBuilder();
 
-        public PathPartGap( final KmerAdjacency kmer ) { this(); sequence.append(kmer.toString()); }
-        private PathPartGap() { sequence = new StringBuilder(); }
+        public PathPartGap( final KmerAdjacency kmer ) { sequence.append(kmer.toString()); }
+        private PathPartGap( final CharSequence sequence ) { this.sequence.append(sequence); }
 
         @Override public Contig getContig() { return null; }
         @Override public CharSequence getSequence() { return sequence.toString(); }
-        @Override public void extendGap( final char call ) { sequence.append(call); }
-        @Override public void extendPath() { throw new GATKException("can't extend path in a gap"); }
+        @Override public void extend( final char call ) { sequence.append(call); }
         @Override public int getStart() { return 0; }
         @Override public int getStop() { return sequence.length(); }
         @Override public boolean isGap() { return true; }
-        @Override public int getLength() { return sequence.length(); }
-        @Override public PathPart rc() {
-            final PathPartGap result = new PathPartGap();
-            result.sequence.append(new SequenceRC(sequence));
-            return result;
-        }
+        @Override public int getLength() { return sequence.length() - Kmer.KSIZE + 1; }
+        @Override public PathPart rc() { return new PathPartGap(new SequenceRC(sequence)); }
+        @Override public char getFirstCall() { return sequence.charAt(Kmer.KSIZE - 1); }
+        @Override public char getLastCall() { return sequence.charAt(sequence.length() - Kmer.KSIZE + 1); }
     }
 
     public static final class PathPartContig implements PathPart {
@@ -1483,8 +1574,7 @@ public class LocalAssembler extends PairWalker {
 
         @Override public Contig getContig() { return contig; }
         @Override public String getSequence() { return null; }
-        @Override public void extendGap( final char call ) { throw new GATKException("can't extend gap in a path"); }
-        @Override public void extendPath() { stop += 1; }
+        @Override public void extend( final char call ) { stop += 1; }
         @Override public int getStart() { return start; }
         @Override public int getStop() { return stop; }
         @Override public boolean isGap() { return false; }
@@ -1493,6 +1583,8 @@ public class LocalAssembler extends PairWalker {
             final int revBase = contig.size() - Kmer.KSIZE + 1;
             return new PathPartContig(contig.rc(), revBase - stop, revBase - start);
         }
+        @Override public char getFirstCall() { return getContig().getSequence().charAt(start + Kmer.KSIZE - 1); }
+        @Override public char getLastCall() { return getContig().getSequence().charAt(stop - 1); }
     }
 
     public static final class Error {
@@ -1571,7 +1663,9 @@ public class LocalAssembler extends PairWalker {
                 curAdjacency = nextAdjacency;
                 children = maxNode.getChildren();
             }
-            curAdjacency.observe(prevAdjacency, null);
+            if ( prevAdjacency != null ) {
+                curAdjacency.observe(prevAdjacency, null);
+            }
         }
 
         private static GapNode[] addChild( final GapNode[] children, final int callChar, final boolean onGraph ) {
@@ -1637,7 +1731,7 @@ public class LocalAssembler extends PairWalker {
                             parts.add(currentPathPart);
                         } else if ( currentPathPart.isGap() ) {
                             // if the current path part is a PathPartGap, just extend it
-                            currentPathPart.extendGap(call);
+                            currentPathPart.extend(call);
                         } else {
                             // new PathPartGap
                             currentPathPart = new PathPartGap(new KmerAdjacencyImpl(kVal));
@@ -1653,20 +1747,63 @@ public class LocalAssembler extends PairWalker {
                         } else if ( contig == currentPathPart.getContig() ) {
                             // our lookup is on the current path part's contig -- extend it
                             if ( kmer.getContigOffset() == currentPathPart.getStop() ) {
-                                currentPathPart.extendPath();
+                                currentPathPart.extend(call);
                             } else {
-                                // weird:  kmer is non-contiguous.  start a new path part
+                                // weird:  kmer is non-contiguous.  start a new path part after a zero-length gap
+                                parts.add(zeroLengthGap(currentPathPart));
                                 currentPathPart = new PathPartContig(contig, kmer.getContigOffset());
                                 parts.add(currentPathPart);
                             }
                         } else {
+                            final int kmerContigOffset = kmer.getContigOffset();
+                            if ( currentPathPart.isGap() ) {
+                                // squash captured gaps caused by single-base sequencing errors
+                                final int gapLen = currentPathPart.getLength();
+                                if ( gapLen == Kmer.KSIZE ) {
+                                    final int prevPartIdx = parts.size() - 2;
+                                    if ( prevPartIdx >= 0 ) {
+                                        final PathPart prevPart = parts.get(prevPartIdx);
+                                        final Contig prevPartContig = prevPart.getContig();
+                                        final int prevPartStart = prevPart.getStart();
+                                        final int prevPartStop = prevPart.getStop();
+                                        final int prevPartMaxStop = prevPartContig.size() - Kmer.KSIZE + 1;
+                                        final int newStop = kmerContigOffset + 1;
+                                        if ( prevPartContig == kmer.getContig() ) {
+                                            if ( kmerContigOffset - prevPartStop == gapLen ) {
+                                                currentPathPart =
+                                                        new PathPartContig(prevPartContig, prevPartStart, newStop);
+                                                parts.set(prevPartIdx, currentPathPart);
+                                                parts.remove(prevPartIdx + 1);
+                                                continue;
+                                            }
+                                        } else if ( prevPartMaxStop - prevPartStop + kmerContigOffset == gapLen ) {
+                                            parts.set(prevPartIdx,
+                                                    new PathPartContig(prevPartContig, prevPartStart, prevPartMaxStop));
+                                            currentPathPart = new PathPartContig(kmer.getContig(), 0, newStop);
+                                            parts.set(prevPartIdx + 1, currentPathPart);
+                                            continue;
+                                        }
+                                    }
+                                }
+                            } else if ( !currentPathPart.stopsAtEnd() || kmerContigOffset != 0 ) {
+                                // not an end-to-end join across contigs -- record a zero-length gap
+                                parts.add(zeroLengthGap(currentPathPart));
+                            }
                             // we're jumping to a new contig.  start a new path part
-                            currentPathPart = new PathPartContig(contig, kmer.getContigOffset());
+                            currentPathPart = new PathPartContig(contig, kmerContigOffset);
                             parts.add(currentPathPart);
                         }
                     }
                 }
             }
+        }
+
+        private static PathPart zeroLengthGap( final PathPart currentPathPart ) {
+            final int currentStop = currentPathPart.getStop();
+            final CharSequence currentSequence = currentPathPart.getContig().getSequence();
+            final CharSequence almostAKmer =
+                    currentSequence.subSequence(currentStop, currentStop + Kmer.KSIZE - 1);
+            return new PathPartGap(almostAKmer);
         }
 
         // RCing constructor
@@ -1691,7 +1828,7 @@ public class LocalAssembler extends PairWalker {
                 sb.append(prefix);
                 prefix = ", ";
                 if ( pp.isGap() ) {
-                    sb.append("NoKmer(").append(pp.getSequence().length() - Kmer.KSIZE + 1).append(")");
+                    sb.append("NoKmer(").append(pp.getLength()).append(")");
                 } else {
                     final Contig contig = pp.getContig();
                     sb.append(contig);
@@ -1709,7 +1846,6 @@ public class LocalAssembler extends PairWalker {
 
     public static final class CutData {
         public static int nextNum;
-        public static CutData instance = new CutData();
         public int visitNum;
         public int minVisitNum;
 
@@ -1739,6 +1875,7 @@ public class LocalAssembler extends PairWalker {
             final TransitPairCount that = (TransitPairCount)obj;
             return this.contig1 == that.contig1 && this.contig2 == that.contig2;
         }
+
         @Override public int hashCode() {
             return 47 * (47 * contig1.hashCode() + contig2.hashCode());
         }
@@ -1781,7 +1918,7 @@ public class LocalAssembler extends PairWalker {
         }
     }
 
-/*
+
     private static void checkKmerConnectivity( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
         for ( final KmerAdjacency kmer : kmerAdjacencySet ) {
             final int initialCallMask = 1 << kmer.getInitialCall();
@@ -1819,5 +1956,4 @@ public class LocalAssembler extends PairWalker {
             }
         }
     }
-*/
 }
