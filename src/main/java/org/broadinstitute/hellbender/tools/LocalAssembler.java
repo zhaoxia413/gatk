@@ -82,7 +82,7 @@ public class LocalAssembler extends PairWalker {
         final List<Path> readPaths = pathReads(kmerAdjacencySet);
         final Map<Contig,List<TransitPairCount>> contigTransitsMap = collectTransitPairCounts(contigs, readPaths);
         final List<Traversal> allTraversals = traverseAllPaths(contigs, contigTransitsMap, readPaths);
-        writeTraversals(allTraversals, output + ".traversals.fa");
+        writeTraversals(allTraversals, output + ".traversals.fa.gz");
 
         contigs.sort(Comparator.comparingInt(ContigImpl::getId));
         writeDOT(contigs, output + ".assembly.dot");
@@ -102,6 +102,7 @@ public class LocalAssembler extends PairWalker {
 
     private static List<ContigImpl> buildContigs( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
         final List<ContigImpl> contigs = new ArrayList<>();
+        ContigImpl.nContigs = 1;
         for ( final KmerAdjacency kmerAdjacency : kmerAdjacencySet ) {
             if ( kmerAdjacency.getContig() == null ) {
                 ContigImpl contig = null;
@@ -904,7 +905,7 @@ public class LocalAssembler extends PairWalker {
     }
 
     private static void writeTraversals( final List<Traversal> traversals, final String fileName ) {
-        try ( final BufferedWriter writer = new BufferedWriter(new FileWriter(fileName)) ) {
+        try ( final BufferedWriter writer = makeGZFile(fileName) ) {
             for ( final Traversal traversal : traversals ) {
                 writer.write(">");
                 writer.write(traversal.getName());
