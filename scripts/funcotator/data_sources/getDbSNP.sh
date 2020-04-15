@@ -163,9 +163,9 @@ function downloadAndVerifyVcfFiles() {
 
     # Get the VCF file, then make sure that the contig names are correct for HG19 (if applicable)
     echo "${indentSpace}Retrieving VCF file: ftp://ftp.ncbi.nih.gov/snp/organisms/${remoteFolder}/VCF/${vcfFile} ... "
-    if [[ "${filePrefix}" == "hg19" ]] ; then
-        curl ftp://ftp.ncbi.nih.gov/snp/organisms/${remoteFolder}/VCF/${vcfFile} | gunzip | sed -e 's#^\([0-9][0-9]*\)#chr\1#' -e 's#^MT#chrM#' -e 's#^X#chrX#' -e 's#^Y#chrY#' | bgzip > ${vcfFile}
-    else
+    curl ftp://ftp.ncbi.nih.gov/snp/organisms/${remoteFolder}/VCF/${vcfFile} | gunzip | sed -e 's#^\([0-9][0-9]*\)#chr\1#' -e 's#^MT#chrM#' -e 's#^X#chrX#' -e 's#^Y#chrY#' | bgzip > ${vcfFile}
+
+    if [[ "${filePrefix}" != "hg19" ]] ; then
         wget ftp://ftp.ncbi.nih.gov/snp/organisms/${remoteFolder}/VCF/${vcfFile}
 
         echo "${indentSpace}Retrieving VCF Index file: ftp://ftp.ncbi.nih.gov/snp/organisms/${remoteFolder}/VCF/${tbiFile} ... "
