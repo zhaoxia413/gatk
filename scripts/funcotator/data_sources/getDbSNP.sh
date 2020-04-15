@@ -282,6 +282,8 @@ curl ftp://ftp.ncbi.nih.gov/snp/organisms/ 2>/dev/null > ${tmpListing}
 # Get the link for HG19:
 echo "Processing HG19 ..."
 hg19Version=$( cat ${tmpListing} | awk '{print $9}' | grep 'human' | grep 'GRCh37' | grep "b${BUILD_NUMBER}" )
+echo "Found HG19 version: ${hg19Version}"
+echo "Downloading ..."
 
 downloadAndVerifyVcfFiles ${hg19Version} ${OUT_DIR_NAME}/hg19 "hg19"
 
@@ -289,6 +291,8 @@ downloadAndVerifyVcfFiles ${hg19Version} ${OUT_DIR_NAME}/hg19 "hg19"
 # Get the link for HG38:
 echo "Processing HG38 ..."
 hg38Version=$( cat ${tmpListing} | awk '{print $9}' | grep 'human' | grep 'GRCh38' | grep "b${BUILD_NUMBER}" )
+echo "Found HG38 version: ${hg38Version}"
+echo "Downloading ..."
 
 downloadAndVerifyVcfFiles ${hg38Version} ${OUT_DIR_NAME}/hg38 "hg38"
 
