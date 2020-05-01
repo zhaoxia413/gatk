@@ -24,10 +24,7 @@ import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscovery
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.AnnotatedVariantProducer;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.SvDiscoverFromLocalAssemblyContigAlignmentsSpark;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.SvDiscoveryInputMetaData;
-import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AlignedContig;
-import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AlignedContigGenerator;
-import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AlignmentInterval;
-import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.ContigAlignmentsModifier;
+import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.*;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.ContigChimericAlignmentIterativeInterpreter;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.ImpreciseVariantDetector;
 import org.broadinstitute.hellbender.tools.spark.sv.evidence.AlignedAssemblyOrExcuse;
@@ -290,7 +287,13 @@ public class StructuralVariationDiscoveryPipelineSpark extends GATKSparkTool {
                 .dispatchJobs(ctx, contigsByPossibleRawTypes, svDiscoveryInputMetaData, assemblyRawAlignments, true);
         contigsByPossibleRawTypes.unpersist();
 
-        SvDiscoverFromLocalAssemblyContigAlignmentsSpark.filterAndWriteMergedVCF(updatedOutputPath, variants, svDiscoveryInputMetaData);
+        final List<VariantContext> filteredVariants =
+                AnnotatedVariantProducer.filterMergedVCF(variants, svDiscoveryInputMetaData.getDiscoverStageArgs());
+        final String out = updatedOutputPath + SvDiscoverFromLocalAssemblyContigAlignmentsSpark.MERGED_VCF_FILE_NAME;
+        SVVCFWriter.writeVCF(filteredVariants, out,
+                svDiscoveryInputMetaData.getReferenceData().getReferenceSequenceDictionaryBroadcast().getValue(),
+                svDiscoveryInputMetaData.getDefaultToolVCFHeaderLines(),
+                svDiscoveryInputMetaData.getToolLogger());
     }
 
     private static JavaRDD<GATKRead> getContigRawAlignments(final JavaSparkContext ctx,
@@ -332,6 +335,7 @@ public class StructuralVariationDiscoveryPipelineSpark extends GATKSparkTool {
         if (svDiscoveryInputMetaData.getSampleSpecificData().getEvidenceTargetLinks() != null) {
             final PairedStrandedIntervalTree<EvidenceTargetLink> evidenceTargetLinks = svDiscoveryInputMetaData.getSampleSpecificData().getEvidenceTargetLinks();
             final ReadMetadata readMetadata = svDiscoveryInputMetaData.getSampleSpecificData().getReadMetadata();
+            final SAMSequenceDictionary refDict = svDiscoveryInputMetaData.getReferenceData().getReferenceSequenceDictionaryBroadcast().getValue();
             final ReferenceMultiSparkSource reference = svDiscoveryInputMetaData.getReferenceData().getReferenceBroadcast().getValue();
             final DiscoverVariantsFromContigAlignmentsSparkArgumentCollection discoverStageArgs = svDiscoveryInputMetaData.getDiscoverStageArgs();
             final Logger toolLogger = svDiscoveryInputMetaData.getToolLogger();
@@ -339,7 +343,7 @@ public class StructuralVariationDiscoveryPipelineSpark extends GATKSparkTool {
             // annotate with evidence links
             annotatedVariants = AnnotatedVariantProducer.
                     annotateBreakpointBasedCallsWithImpreciseEvidenceLinks(assemblyBasedVariants,
-                            evidenceTargetLinks, readMetadata, reference, discoverStageArgs, toolLogger);
+                            evidenceTargetLinks, readMetadata, refDict, discoverStageArgs, toolLogger);
 
             // then also imprecise deletion
             final List<VariantContext> impreciseVariants = ImpreciseVariantDetector.
@@ -412,7 +416,7 @@ public class StructuralVariationDiscoveryPipelineSpark extends GATKSparkTool {
                                     .collect(Collectors.toList()))
                     .filter(list -> !list.isEmpty())
                     .map(forOneContig ->
-                            SvDiscoverFromLocalAssemblyContigAlignmentsSpark.
+                            AssemblyContigAlignmentsConfigPicker.
                                     SAMFormattedContigAlignmentParser.
                                     parseReadsAndOptionallySplitGappedAlignments(forOneContig,
                                             DiscoverVariantsFromContigAlignmentsSparkArgumentCollection
