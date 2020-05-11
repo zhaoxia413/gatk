@@ -135,8 +135,7 @@ import java.util.List;
         programGroup = ShortVariantDiscoveryProgramGroup.class
 )
 @DocumentedFeature
-public final class
-HaplotypeCaller extends AssemblyRegionWalker {
+public final class HaplotypeCaller extends AssemblyRegionWalker {
 
     //NOTE: many of these settings are referenced by HaplotypeCallerSpark
     public static final int DEFAULT_MIN_ASSEMBLY_REGION_SIZE = 50;
