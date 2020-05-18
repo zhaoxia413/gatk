@@ -12,6 +12,7 @@ import org.broadinstitute.hellbender.testutils.GenomicsDBTestUtils;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.testng.Assert;
+import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
