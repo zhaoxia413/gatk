@@ -129,9 +129,11 @@ public final class GnarlyGenotyperEngine {
                             //here we still have the non-ref
                             if (variant.hasAttribute(((ReducibleAnnotation) annotation).getPrimaryRawKey())) {
                                 final Map<String, Object> finalValue = ann.finalizeRawData(vcfBuilder.make(), variant);
-                                finalValue.forEach((key, value) -> annotationsToBeModified.put(key, value));
-                                if (annotationDBBuilder != null) {
-                                    annotationDBBuilder.attribute(ann.getPrimaryRawKey(), variant.getAttribute(ann.getPrimaryRawKey()));
+                                if (finalValue != null) {
+                                    finalValue.forEach((key, value) -> annotationsToBeModified.put(key, value));
+                                    if (annotationDBBuilder != null) {
+                                        annotationDBBuilder.attribute(ann.getPrimaryRawKey(), variant.getAttribute(ann.getPrimaryRawKey()));
+                                    }
                                 }
                             }
                         }
