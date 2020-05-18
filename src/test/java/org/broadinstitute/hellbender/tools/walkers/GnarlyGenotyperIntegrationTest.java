@@ -128,8 +128,8 @@ public class GnarlyGenotyperIntegrationTest extends CommandLineProgramTest {
     @DataProvider(name="hailVcfs")
     public Object[][] getHailVcfs() {
         return new Object[][] {
-                new String[] {getToolTestDataDir() + "hailOutput.chr20snippet.sites_only.vcf", getToolTestDataDir() + "expected.hailOutput.chr20snippet.sites_only.vcf", "chr20:10000000-10030000"},
-                new String[]{ getToolTestDataDir() + "300k.sites_only.hail.vcf", getToolTestDataDir() + "expected.", "chrX:37349125-37349619"}
+                new String[]{ getToolTestDataDir() + "300k.sites_only.hail.vcf", getToolTestDataDir() + "expected.300k.sites_only.hail.vcf", "chrX:37349125-37349619"},
+                new String[] {getToolTestDataDir() + "hailOutput.chr20snippet.sites_only.vcf", getToolTestDataDir() + "expected.hailOutput.chr20snippet.sites_only.vcf", "chr20:10000000-10030000"}
         };
     }
 
@@ -140,16 +140,11 @@ public class GnarlyGenotyperIntegrationTest extends CommandLineProgramTest {
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.addReference(new File(hg38Reference))
                 .add("V", input)
-                .add("L", "chr20:10000000-10030000")
-                .add("only-output-calls-starting-in-intervals", true)
-                .add("keep-all-sites", true)
-                .addOutput(output)
-                .add(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false")
-                .add("V", input)
                 .add("L", interval)
                 .add("only-output-calls-starting-in-intervals", true)
                 .add("keep-all-sites", true)
-                .addOutput(output);
+                .addOutput(output)
+                .add(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false");
         runCommandLine(args);
 
         //should have same variants as input with low QUAL variants marked with a monomorphic filter
