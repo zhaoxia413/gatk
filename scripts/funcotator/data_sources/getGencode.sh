@@ -15,8 +15,7 @@ MAXARGS=0
 
 # Latest release numbers for our references.
 # Update these numbers when a new Gencode is released.
-LATEST_HG19_RELEASE=19
-LATEST_HG38_RELEASE=28
+LATEST_RELEASE=34
 
 DATA_SOURCE_NAME="Gencode"
 OUT_DIR_NAME='gencode'
@@ -158,25 +157,35 @@ function getGencodeFiles()
 
     mkdir -p ${OUT_DIR_NAME}/${refVersion}
     pushd ${OUT_DIR_NAME}/${refVersion} &> /dev/null
-    wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_${version}/gencode.v${version}.annotation.gtf.gz
-    wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_${version}/gencode.v${version}.pc_transcripts.fa.gz
 
-    gunzip gencode.v${version}.annotation.gtf.gz
-    gunzip gencode.v${version}.pc_transcripts.fa.gz
+		fileRefVersion=${version}
+		if [[ "${refVersion}" == "hg38" ]] ; then
+			sourceUrl=ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_${version}/gencode.v${version}.annotation.gtf.gz
+			wget ${sourceUrl} 
+    	wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_${version}/gencode.v${version}.pc_transcripts.fa.gz
+		else
+			fileRefVersion="${version}lift37"
+			sourceUrl=ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_${version}/GRCh37_mapping/gencode.v${fileRefVersion}.annotation.gtf.gz
+			wget ${sourceUrl}
+			wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_${version}/GRCh37_mapping/gencode.v${fileRefVersion}.pc_transcripts.fa.gz
+		fi
+		
+    gunzip gencode.v${fileRefVersion}.annotation.gtf.gz
+    gunzip gencode.v${fileRefVersion}.pc_transcripts.fa.gz
 
     # We must fix the information in the gencode gtf file:
     echo "Reordering Gencode GTF data ..."
-    ${SCRIPTDIR}/fixGencodeOrdering.py gencode.v${version}.annotation.gtf > gencode.v${version}.annotation.REORDERED.gtf
+    ${SCRIPTDIR}/fixGencodeOrdering.py gencode.v${fileRefVersion}.annotation.gtf > gencode.v${fileRefVersion}.annotation.REORDERED.gtf
 
     # Clean up original file:
-    rm gencode.v${version}.annotation.gtf
+    rm gencode.v${fileRefVersion}.annotation.gtf
 
     echo "Creating config file ..."
-    createConfigFile "${DATA_SOURCE_NAME}" "${version}" "gencode.v${version}.annotation.REORDERED.gtf" "ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_${version}/gencode.v${version}.annotation.gtf.gz" "gencode.v${version}.pc_transcripts.fa" > gencode.config
+    createConfigFile "${DATA_SOURCE_NAME}" "${version}" "gencode.v${fileRefVersion}.annotation.REORDERED.gtf" "${sourceUrl}" "gencode.v${fileRefVersion}.pc_transcripts.fa" > gencode.config
 
     if $HAS_SAMTOOLS ; then
-        echo "Indexing Fasta File: gencode.v${version}.pc_transcripts.fa"
-        samtools faidx gencode.v${version}.pc_transcripts.fa
+        echo "Indexing Fasta File: gencode.v${fileRefVersion}.pc_transcripts.fa"
+        samtools faidx gencode.v${fileRefVersion}.pc_transcripts.fa
     fi
 
     echo
@@ -230,10 +239,10 @@ if [[ -d ${OUT_DIR_NAME} ]] ; then
 fi
 
 # Get the link for HG19:
-getGencodeFiles $LATEST_HG19_RELEASE hg19
+getGencodeFiles $LATEST_RELEASE hg19
 
 # Get the link for HG38:
-getGencodeFiles $LATEST_HG38_RELEASE hg38
+getGencodeFiles $LATEST_RELEASE hg38
 
 if ! $HAS_SAMTOOLS ; then
     echo -e "\033[1;33;40m##################################################################################\033[0;0m"
