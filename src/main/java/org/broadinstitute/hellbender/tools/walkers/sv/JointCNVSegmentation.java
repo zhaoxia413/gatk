@@ -67,7 +67,7 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
             throw new UserException("Reference sequence dictionary required");
         }
 
-        defragmenter = new SVDepthOnlyCallDefragmenter(dictionary, 0.0);
+        defragmenter = new SVDepthOnlyCallDefragmenter(dictionary, 0.0, getTraversalIntervals());
         clusterEngine = new SVClusterEngine(dictionary, true);
 
         vcfWriter = getVCFWriter();

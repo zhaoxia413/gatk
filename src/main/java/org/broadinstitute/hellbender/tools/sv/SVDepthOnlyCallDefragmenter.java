@@ -4,9 +4,7 @@ import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.Genotype;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
-import org.broadinstitute.hellbender.utils.IntervalUtils;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.*;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -15,15 +13,30 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
 
     private final double minSampleOverlap;
     private static final double PADDING_FRACTION = 0.2;
+    private final List<GenomeLoc> coverageIntervals;
+    private final TreeMap<GenomeLoc, Integer> genomicToBinMap;
+    final GenomeLocParser parser;
 
     public SVDepthOnlyCallDefragmenter(final SAMSequenceDictionary dictionary) {
-        this(dictionary, 0.9);
+        this(dictionary, 0.9, null);
     }
 
     //for single-sample clustering case
-    public SVDepthOnlyCallDefragmenter(final SAMSequenceDictionary dictionary, double minSampleOverlap) {
+    public SVDepthOnlyCallDefragmenter(final SAMSequenceDictionary dictionary, double minSampleOverlap, List<SimpleInterval> traversalIntervals) {
         super(dictionary, CLUSTERING_TYPE.SINGLE_LINKAGE);
+        parser = new GenomeLocParser(this.dictionary);
         this.minSampleOverlap = minSampleOverlap;
+
+        if (traversalIntervals != null) {
+            this.coverageIntervals = IntervalUtils.genomeLocsFromLocatables(parser,traversalIntervals);
+            genomicToBinMap = new TreeMap<>();
+            for (int i = 0; i < traversalIntervals.size(); i++) {
+                genomicToBinMap.put(parser.createGenomeLoc(traversalIntervals.get(i)),i);
+            }
+        } else {
+            genomicToBinMap = null;
+            coverageIntervals = null;
+        }
     }
 
     /**
@@ -60,8 +73,16 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
         sharedSamples.retainAll(b.getSamples());
         final double sampleOverlap = Math.min(sharedSamples.size() / (double) a.getSamples().size(), sharedSamples.size() / (double) b.getSamples().size());
         if (sampleOverlap < minSampleOverlap) return false;
+        //in the single-sample case, match copy number strictly
+        boolean copyNumbersAgree = true;
+        if (a.getGenotypes().size() == 1 && b.getGenotypes().size() == 1) {
+            if (a.getGenotypes().get(0).hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT) && b.getGenotypes().get(0).hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT) &&
+                a.getGenotypes().get(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT) != b.getGenotypes().get(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT)) {
+                copyNumbersAgree = false;
+            }
+        }
         return getClusteringInterval(a, null)
-                .overlaps(getClusteringInterval(b, null));
+                .overlaps(getClusteringInterval(b, null)) && copyNumbersAgree;
     }
 
 
@@ -76,8 +97,21 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
     protected SimpleInterval getClusteringInterval(final SVCallRecordWithEvidence call, final SimpleInterval currentClusterInterval) {
         Utils.nonNull(call);
         final SimpleInterval callInterval = getCallInterval(call);
-        final int paddedCallStart = (int) (callInterval.getStart() - PADDING_FRACTION * callInterval.getLengthOnReference());
-        final int paddedCallEnd = (int) (callInterval.getEnd() + PADDING_FRACTION * callInterval.getLengthOnReference());
+        final int paddedCallStart, paddedCallEnd;
+        if (genomicToBinMap != null) {
+            final GenomeLoc callStart = parser.createGenomeLoc(call.getContig(), call.getStart(), call.getStart());
+            final GenomeLoc callEnd = parser.createGenomeLoc(call.getContig(), call.getEnd(), call.getEnd());
+            final int callStartIndex = genomicToBinMap.ceilingEntry(callStart) == null ? 0 : genomicToBinMap.ceilingEntry(callStart) .getValue();
+            final int callEndIndex = genomicToBinMap.floorEntry(callEnd) == null ? genomicToBinMap.size() - 1 : genomicToBinMap.floorEntry(callEnd).getValue();
+            final int callBinLength = callEndIndex - callStartIndex + 1;
+            final int paddedStartIndex = Math.max(callStartIndex - (int)Math.round(callBinLength * PADDING_FRACTION), 0);
+            paddedCallStart = coverageIntervals.get(paddedStartIndex).getStart();
+            final int paddedEndIndex = Math.min(callEndIndex + (int)Math.round(callBinLength * PADDING_FRACTION), genomicToBinMap.size() - 1);
+            paddedCallEnd = coverageIntervals.get(paddedEndIndex).getEnd();
+        } else {
+            paddedCallStart = (int) (callInterval.getStart() - PADDING_FRACTION * callInterval.getLengthOnReference());
+            paddedCallEnd = (int) (callInterval.getEnd() + PADDING_FRACTION * callInterval.getLengthOnReference());
+        }
         final String currentContig = getCurrentContig();
         final int contigLength = dictionary.getSequence(currentContig).getSequenceLength();
         if (currentClusterInterval == null) {

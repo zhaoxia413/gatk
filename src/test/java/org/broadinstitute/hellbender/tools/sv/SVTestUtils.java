@@ -7,7 +7,9 @@ import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.GenotypeBuilder;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -23,6 +25,14 @@ public class SVTestUtils {
     final static int start = 10001;
 
     final static int length = 10000;
+
+    //make intervals like xxxx----xxxx----xxxx----xxxx----xxxx
+    final static List<SimpleInterval> targetIntervals = new ArrayList<>(
+            Arrays.asList(new SimpleInterval("chr1", start, start + length/9),
+            new SimpleInterval("chr1", start + length*2/9, start + length*3/9),
+            new SimpleInterval("chr1", start + length*4/9, start + length*5/9),
+            new SimpleInterval("chr1", start + length*6/9, start + length*7/9),
+            new SimpleInterval("chr1", start + length*8/9, start + length)));
 
     //separated from end of call1 by defragmenter padding
     final static int start2 = (start + length -1) + (int)Math.round(length * SVDepthOnlyCallDefragmenter.getPaddingFraction());

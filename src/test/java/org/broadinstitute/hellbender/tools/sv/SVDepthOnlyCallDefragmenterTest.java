@@ -1,11 +1,16 @@
 package org.broadinstitute.hellbender.tools.sv;
 
+import htsjdk.samtools.reference.FastaSequenceFile;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.utils.GenomeLocParser;
+import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.testng.Assert;
 import org.testng.annotations.BeforeTest;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -14,7 +19,8 @@ public class SVDepthOnlyCallDefragmenterTest {
 
     final static SVDepthOnlyCallDefragmenter defaultDefragmenter = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict);
 
-    final static SVDepthOnlyCallDefragmenter singleSampleDefragmenter = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, 0.0);
+    final private static GenomeLocParser glParser = new GenomeLocParser(SVTestUtils.dict);
+    final static SVDepthOnlyCallDefragmenter singleSampleDefragmenter = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, 0.0, SVTestUtils.targetIntervals);
 
     @BeforeTest
     public void initializeDefragmenters() {
@@ -77,7 +83,7 @@ public class SVDepthOnlyCallDefragmenterTest {
         Assert.assertTrue(defaultDefragmenter.getClusteringInterval(SVTestUtils.leftEdgeCall, null).getStart() > 0);
         Assert.assertTrue(singleSampleDefragmenter.getClusteringInterval(SVTestUtils.leftEdgeCall, null).getStart() > 0);
         Assert.assertTrue(defaultDefragmenter.getClusteringInterval(SVTestUtils.rightEdgeCall, null).getEnd() == SVTestUtils.chr1Length);
-        Assert.assertTrue(singleSampleDefragmenter.getClusteringInterval(SVTestUtils.rightEdgeCall, null).getEnd() == SVTestUtils.chr1Length);
+        Assert.assertTrue(singleSampleDefragmenter.getClusteringInterval(SVTestUtils.rightEdgeCall, null).getEnd() <= SVTestUtils.chr1Length);  //will be less than chr1length if target intervals are smaller than chr1
 
 
         final SimpleInterval littleCluster = new SimpleInterval("chr1", SVTestUtils.start, SVTestUtils.start + SVTestUtils.length -1);
@@ -91,7 +97,7 @@ public class SVDepthOnlyCallDefragmenterTest {
     @Test
     public void testAdd() {
         //single-sample merge case, ignoring sample sets
-        final SVDepthOnlyCallDefragmenter temp1 = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, 0.0);
+        final SVDepthOnlyCallDefragmenter temp1 = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, 0.0, SVTestUtils.targetIntervals);
         temp1.add(SVTestUtils.call1);
         //force new cluster by adding a non-overlapping event
         temp1.add(SVTestUtils.call3);
@@ -100,7 +106,7 @@ public class SVDepthOnlyCallDefragmenterTest {
         Assert.assertEquals(SVTestUtils.call1, output1.get(0));
         Assert.assertEquals(SVTestUtils.call3, output1.get(1));
 
-        final SVDepthOnlyCallDefragmenter temp2 = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, 0.0);
+        final SVDepthOnlyCallDefragmenter temp2 = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, 0.0, SVTestUtils.targetIntervals);
         temp2.add(SVTestUtils.call1);
         temp2.add(SVTestUtils.call2);  //should overlap after padding
         //force new cluster by adding a call on another contig
