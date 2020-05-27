@@ -22,16 +22,16 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
     }
 
     //for single-sample clustering case
-    public SVDepthOnlyCallDefragmenter(final SAMSequenceDictionary dictionary, double minSampleOverlap, List<SimpleInterval> traversalIntervals) {
+    public SVDepthOnlyCallDefragmenter(final SAMSequenceDictionary dictionary, double minSampleOverlap, List<GenomeLoc> traversalIntervals) {
         super(dictionary, CLUSTERING_TYPE.SINGLE_LINKAGE);
         parser = new GenomeLocParser(this.dictionary);
         this.minSampleOverlap = minSampleOverlap;
 
         if (traversalIntervals != null) {
-            this.coverageIntervals = IntervalUtils.genomeLocsFromLocatables(parser,traversalIntervals);
+            this.coverageIntervals = traversalIntervals;
             genomicToBinMap = new TreeMap<>();
             for (int i = 0; i < traversalIntervals.size(); i++) {
-                genomicToBinMap.put(parser.createGenomeLoc(traversalIntervals.get(i)),i);
+                genomicToBinMap.put(traversalIntervals.get(i),i);
             }
         } else {
             genomicToBinMap = null;

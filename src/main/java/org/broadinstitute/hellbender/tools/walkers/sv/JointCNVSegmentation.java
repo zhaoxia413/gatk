@@ -7,7 +7,6 @@ import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
-import htsjdk.variant.vcf.VCFStandardHeaderLines;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
@@ -24,10 +23,8 @@ import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.tools.sv.SVClusterEngine;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecordWithEvidence;
 import org.broadinstitute.hellbender.tools.sv.SVDepthOnlyCallDefragmenter;
-import org.broadinstitute.hellbender.utils.IntervalUtils;
-import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
-import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
 
 import java.io.File;
@@ -47,13 +44,18 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
     private SAMSequenceDictionary dictionary;
     private SVDepthOnlyCallDefragmenter defragmenter;
     private SVClusterEngine clusterEngine;
+    private List<GenomeLoc> callIntervals;
 
     private String currentContig;
 
     public static final String MIN_QUALITY_LONG_NAME = "minimum-qs-score";
+    public static final String MODEL_CALL_INTERVALS = "model-call-intervals";
 
     @Argument(fullName = MIN_QUALITY_LONG_NAME, doc = "Minimum QS score to combine a variant segment")
     private int minQS = 20;
+
+    @Argument(fullName = MODEL_CALL_INTERVALS, doc = "Intervals used for gCNV calls.  Should be preprocessed and filtered to line up with model calls. Required for exomes.")
+    private File modelCallIntervalList;
 
     @Argument(fullName= StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName=StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
@@ -67,7 +69,17 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
             throw new UserException("Reference sequence dictionary required");
         }
 
-        defragmenter = new SVDepthOnlyCallDefragmenter(dictionary, 0.0, getTraversalIntervals());
+        final GenomeLocParser parser = new GenomeLocParser(this.dictionary);
+
+        if (modelCallIntervalList == null) {
+            callIntervals = null;
+        } else {
+        final List<GenomeLoc> inputCoverageIntervals = IntervalUtils.featureFileToIntervals(parser, modelCallIntervalList.getAbsolutePath());
+        final List<GenomeLoc> inputTraversalIntervals = IntervalUtils.genomeLocsFromLocatables(parser,getTraversalIntervals());
+            callIntervals = IntervalUtils.mergeListsBySetOperator(inputCoverageIntervals, inputTraversalIntervals, IntervalSetRule.INTERSECTION);
+        }
+
+        defragmenter = new SVDepthOnlyCallDefragmenter(dictionary, 0.0, callIntervals);
         clusterEngine = new SVClusterEngine(dictionary, true);
 
         vcfWriter = getVCFWriter();
