@@ -197,13 +197,16 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
     private VariantContext updateGenotypes(final VariantContext vc, final Map<String, Integer> sampleCopyNumbers) {
         final VariantContextBuilder builder = new VariantContextBuilder(vc);
         final List<Genotype> newGenotypes = new ArrayList<>();
-        for (Genotype g : vc.getGenotypes()) {
-            if (!sampleCopyNumbers.containsKey(g.getSampleName())) {
-                newGenotypes.add(g);
+        for (final String sample : samples) {
+            if (!sampleCopyNumbers.containsKey(sample)) {
+                final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(sample);
+                genotypeBuilder.alleles(Lists.newArrayList(Allele.REF_N, Allele.REF_N));
+                genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, HomoSapiensConstants.DEFAULT_PLOIDY);
+                newGenotypes.add(genotypeBuilder.make());
             } else {
-                final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(g);
-                if (sampleCopyNumbers.containsKey(g.getSampleName())) {
-                    genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, sampleCopyNumbers.get(g.getSampleName()));
+                final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(sample);
+                if (sampleCopyNumbers.containsKey(sample)) {
+                    genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, sampleCopyNumbers.get(sample));
                 }
                 newGenotypes.add(genotypeBuilder.make());
             }
@@ -221,6 +224,7 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
         builder.attribute(GATKSVVCFConstants.SVLEN, call.getLength());
         builder.attribute(VCFConstants.SVTYPE, call.getType());
         final List<Genotype> genotypes = new ArrayList<>();
+        //TODO: I don't need this for loop
         for (final String sample : samples) {
             final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(sample);
             if (call.getSamples().contains(sample)) {
@@ -230,10 +234,6 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
                     genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, currentGenotype.getExtendedAttribute(GermlineCNVSegmentVariantComposer.CN));
                 }
 
-            } else {
-                //TODO: check for overlap with previous calls
-                genotypeBuilder.alleles(Lists.newArrayList(refAllele, refAllele));
-                genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, HomoSapiensConstants.DEFAULT_PLOIDY);
             }
             genotypes.add(genotypeBuilder.make());
         }
