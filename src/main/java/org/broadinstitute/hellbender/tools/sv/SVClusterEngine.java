@@ -21,11 +21,11 @@ public class SVClusterEngine extends LocatableClusterEngine<SVCallRecordWithEvid
     private final int MIXED_CLUSTERING_WINDOW = 2000;
 
     public SVClusterEngine(final SAMSequenceDictionary dictionary) {
-        super(dictionary, CLUSTERING_TYPE.MAX_CLIQUE);
+        super(dictionary, CLUSTERING_TYPE.MAX_CLIQUE, null);
     }
 
     public SVClusterEngine(final SAMSequenceDictionary dictionary, boolean depthOnly) {
-        super(dictionary, depthOnly ? CLUSTERING_TYPE.SINGLE_LINKAGE : CLUSTERING_TYPE.MAX_CLIQUE);
+        super(dictionary, depthOnly ? CLUSTERING_TYPE.SINGLE_LINKAGE : CLUSTERING_TYPE.MAX_CLIQUE, null);
     }
 
     /**
@@ -186,13 +186,21 @@ public class SVClusterEngine extends LocatableClusterEngine<SVCallRecordWithEvid
     }
 
     private SimpleInterval getStartClusteringInterval(final SVCallRecordWithEvidence call) {
-        final int padding = getEndpointClusteringPadding(call);
-        return call.getStartAsInterval().expandWithinContig(padding, dictionary);
+        if (this.genomicToBinMap == null) {
+            final int padding = getEndpointClusteringPadding(call);
+            return call.getStartAsInterval().expandWithinContig(padding, dictionary);
+        } else {
+            return call.getStartAsInterval();
+        }
     }
 
     private SimpleInterval getEndClusteringInterval(final SVCallRecordWithEvidence call) {
-        final int padding =  getEndpointClusteringPadding(call);
-        return call.getEndAsInterval().expandWithinContig(padding, dictionary);
+        if (this.genomicToBinMap == null) {
+            final int padding = getEndpointClusteringPadding(call);
+            return call.getEndAsInterval().expandWithinContig(padding, dictionary);
+        } else {
+            return call.getStartAsInterval();
+        }
     }
 
     private int getEndpointClusteringPadding(final SVCallRecordWithEvidence call) {

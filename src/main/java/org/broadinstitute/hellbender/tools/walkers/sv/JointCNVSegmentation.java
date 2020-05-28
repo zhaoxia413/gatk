@@ -25,7 +25,9 @@ import org.broadinstitute.hellbender.tools.sv.SVCallRecordWithEvidence;
 import org.broadinstitute.hellbender.tools.sv.SVDepthOnlyCallDefragmenter;
 import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
+import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
+import shaded.cloud_nio.com.google.errorprone.annotations.Var;
 
 import java.io.File;
 import java.util.*;
@@ -79,7 +81,7 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
             callIntervals = IntervalUtils.mergeListsBySetOperator(inputCoverageIntervals, inputTraversalIntervals, IntervalSetRule.INTERSECTION);
         }
 
-        defragmenter = new SVDepthOnlyCallDefragmenter(dictionary, 0.0, callIntervals);
+        defragmenter = new SVDepthOnlyCallDefragmenter(dictionary, 0.8, callIntervals);
         clusterEngine = new SVClusterEngine(dictionary, true);
 
         vcfWriter = getVCFWriter();
@@ -127,23 +129,86 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
 
     @Override
     public Object onTraversalSuccess() {
-        processClusters();  //Don't forget to do the last cluster!!!
+        processClusters();
         return null;
     }
 
     private void processClusters() {
         final List<SVCallRecordWithEvidence> defragmentedCalls = defragmenter.getOutput();
         defragmentedCalls.stream().forEachOrdered(clusterEngine::add);
-        //defragmented calls may still be overlapping, so run the clustering engine to combine based on reciprocal overlap
+        //Jack and Isaac cluster first and then defragment
         final List<SVCallRecordWithEvidence> clusteredCalls = clusterEngine.getOutput();
         write(clusteredCalls);
     }
 
     private void write(final List<SVCallRecordWithEvidence> calls) {
-        calls.stream()
+        final List<VariantContext> sortedCalls = calls.stream()
                 .sorted(Comparator.comparing(c -> c.getStartAsInterval(), IntervalUtils.getDictionaryOrderComparator(dictionary)))
                 .map(this::buildVariantContext)
-                .forEachOrdered(vcfWriter::add);
+                .collect(Collectors.toList());
+        Iterator<VariantContext> it = sortedCalls.iterator();
+        ArrayList<VariantContext> overlappingVCs = new ArrayList<>();
+        VariantContext prev = it.next();
+        //gather groups of overlapping VCs and update the genotype copy numbers appropriately
+        while (it.hasNext()) {
+            final VariantContext curr = it.next();
+            if (IntervalUtils.overlaps(prev, curr)) {
+                overlappingVCs.add(prev);
+                overlappingVCs.add(curr);
+                prev = curr;
+            } else {
+                final List<VariantContext> resolvedVCs = resolveVariantContexts(overlappingVCs);
+                for (final VariantContext vc : resolvedVCs) { vcfWriter.add(vc); }
+                prev = curr;
+                overlappingVCs = new ArrayList<>();
+            }
+        }
+    }
+
+    /**
+     * Ensure genotype calls are consistent for overlapping variant contexts
+     * Note that we assume that a sample will not occur twice with the same copy number because it should have been defragmented
+     * @param overlappingVCs
+     * @return
+     */
+    private List<VariantContext> resolveVariantContexts(List<VariantContext> overlappingVCs) {
+        Utils.nonNull(overlappingVCs);
+        if (overlappingVCs.size() == 1) {
+            return overlappingVCs;
+        }
+        final List<VariantContext> resolvedVCs = new ArrayList<>();
+        final Iterator<VariantContext> it = overlappingVCs.iterator();
+        final Map<String, Integer> sampleCopyNumbers = new LinkedHashMap<>();
+        while (it.hasNext()) {
+            final VariantContext curr = it.next();
+            curr.getSampleNames().stream().filter(s -> sampleCopyNumbers.keySet().contains(s)).
+                    filter(s -> sampleCopyNumbers.get(s) != Integer.parseInt(curr.getGenotype(s).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString())).
+                    map(s -> sampleCopyNumbers.put(s, Integer.parseInt(curr.getGenotype(s).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString())));
+            resolvedVCs.add(updateGenotypes(curr, sampleCopyNumbers));
+            for (final Genotype g : curr.getGenotypes()) {
+                if (g.hasAnyAttribute(GermlineCNVSegmentVariantComposer.CN)) {
+                    sampleCopyNumbers.put(g.getSampleName(), Integer.parseInt(g.getExtendedAttribute(GermlineCNVSegmentVariantComposer.CN).toString()));
+                }
+            }
+        }
+        return resolvedVCs;
+    }
+
+    private VariantContext updateGenotypes(final VariantContext vc, final Map<String, Integer> sampleCopyNumbers) {
+        final VariantContextBuilder builder = new VariantContextBuilder(vc);
+        final List<Genotype> newGenotypes = new ArrayList<>();
+        for (Genotype g : vc.getGenotypes()) {
+            if (!sampleCopyNumbers.containsKey(g.getSampleName())) {
+                newGenotypes.add(g);
+            } else {
+                final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(g);
+                if (sampleCopyNumbers.containsKey(g.getSampleName())) {
+                    genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, sampleCopyNumbers.get(g.getSampleName()));
+                }
+                newGenotypes.add(genotypeBuilder.make());
+            }
+        }
+        return builder.genotypes(newGenotypes).make();
     }
 
     public VariantContext buildVariantContext(final SVCallRecordWithEvidence call) {
@@ -166,6 +231,7 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
                 }
 
             } else {
+                //TODO: check for overlap with previous calls
                 genotypeBuilder.alleles(Lists.newArrayList(refAllele, refAllele));
                 genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, HomoSapiensConstants.DEFAULT_PLOIDY);
             }

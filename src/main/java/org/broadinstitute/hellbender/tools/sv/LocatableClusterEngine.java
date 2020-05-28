@@ -2,9 +2,7 @@ package org.broadinstitute.hellbender.tools.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.util.Locatable;
-import org.broadinstitute.hellbender.utils.IntervalUtils;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.*;
 import scala.Tuple2;
 
 import java.util.*;
@@ -12,6 +10,10 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public abstract class LocatableClusterEngine<T extends Locatable> {
+
+    protected final TreeMap<GenomeLoc, Integer> genomicToBinMap;
+    protected final List<GenomeLoc> coverageIntervals;
+    final GenomeLocParser parser;
 
     public enum CLUSTERING_TYPE {
         SINGLE_LINKAGE,
@@ -27,7 +29,7 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
     private String currentContig;
 
 
-    public LocatableClusterEngine(final SAMSequenceDictionary dictionary, final CLUSTERING_TYPE clusteringType) {
+    public LocatableClusterEngine(final SAMSequenceDictionary dictionary, final CLUSTERING_TYPE clusteringType, final List<GenomeLoc> coverageIntervals) {
         this.dictionary = dictionary;
         this.clusteringType = clusteringType;
         this.currentClusters = new LinkedList<>();
@@ -35,6 +37,18 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
         this.outputBuffer = new ArrayList<>();
         currentItemId = 0;
         currentContig = null;
+
+        parser = new GenomeLocParser(this.dictionary);
+        if (coverageIntervals != null) {
+            this.coverageIntervals = coverageIntervals;
+            genomicToBinMap = new TreeMap<>();
+            for (int i = 0; i < coverageIntervals.size(); i++) {
+                genomicToBinMap.put(coverageIntervals.get(i),i);
+            }
+        } else {
+            genomicToBinMap = null;
+            this.coverageIntervals = null;
+        }
     }
 
     abstract protected boolean clusterTogether(final T a, final T b);

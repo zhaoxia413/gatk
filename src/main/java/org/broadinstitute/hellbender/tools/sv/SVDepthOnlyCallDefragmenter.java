@@ -12,31 +12,18 @@ import java.util.stream.Collectors;
 public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRecordWithEvidence> {
 
     private final double minSampleOverlap;
-    private static final double PADDING_FRACTION = 0.2;
-    private final List<GenomeLoc> coverageIntervals;
-    private final TreeMap<GenomeLoc, Integer> genomicToBinMap;
-    final GenomeLocParser parser;
+    private static final double PADDING_FRACTION = 0.5;
 
     public SVDepthOnlyCallDefragmenter(final SAMSequenceDictionary dictionary) {
         this(dictionary, 0.9, null);
     }
 
     //for single-sample clustering case
-    public SVDepthOnlyCallDefragmenter(final SAMSequenceDictionary dictionary, double minSampleOverlap, List<GenomeLoc> traversalIntervals) {
-        super(dictionary, CLUSTERING_TYPE.SINGLE_LINKAGE);
-        parser = new GenomeLocParser(this.dictionary);
+    public SVDepthOnlyCallDefragmenter(final SAMSequenceDictionary dictionary, double minSampleOverlap, List<GenomeLoc> coverageIntervals) {
+        super(dictionary, CLUSTERING_TYPE.SINGLE_LINKAGE, coverageIntervals);
         this.minSampleOverlap = minSampleOverlap;
 
-        if (traversalIntervals != null) {
-            this.coverageIntervals = traversalIntervals;
-            genomicToBinMap = new TreeMap<>();
-            for (int i = 0; i < traversalIntervals.size(); i++) {
-                genomicToBinMap.put(traversalIntervals.get(i),i);
-            }
-        } else {
-            genomicToBinMap = null;
-            coverageIntervals = null;
-        }
+
     }
 
     /**
@@ -73,11 +60,11 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
         sharedSamples.retainAll(b.getSamples());
         final double sampleOverlap = Math.min(sharedSamples.size() / (double) a.getSamples().size(), sharedSamples.size() / (double) b.getSamples().size());
         if (sampleOverlap < minSampleOverlap) return false;
-        //in the single-sample case, match copy number strictly
+        //in the single-sample case, match copy number strictly if we're looking at the same sample
         boolean copyNumbersAgree = true;
-        if (a.getGenotypes().size() == 1 && b.getGenotypes().size() == 1) {
+        if (a.getGenotypes().size() == 1 && b.getGenotypes().size() == 1 && a.getGenotypes().get(0).getSampleName().equals(b.getGenotypes().get(0).getSampleName())) {
             if (a.getGenotypes().get(0).hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT) && b.getGenotypes().get(0).hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT) &&
-                a.getGenotypes().get(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT) != b.getGenotypes().get(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT)) {
+                !(a.getGenotypes().get(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).equals(b.getGenotypes().get(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT)))) {
                 copyNumbersAgree = false;
             }
         }
