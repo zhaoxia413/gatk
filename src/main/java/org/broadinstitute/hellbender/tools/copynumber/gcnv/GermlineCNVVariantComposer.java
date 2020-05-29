@@ -20,8 +20,8 @@ import java.util.Set;
 public abstract class GermlineCNVVariantComposer<DATA extends Locatable> {
     static final String VARIANT_PREFIX = "CNV";
     static final Allele REF_ALLELE = Allele.create("N", true);
-    static final Allele DEL_ALLELE = Allele.create("<DEL>", false);
-    static final Allele DUP_ALLELE = Allele.create("<DUP>", false);
+    public static final Allele DEL_ALLELE = Allele.create("<DEL>", false);
+    public static final Allele DUP_ALLELE = Allele.create("<DUP>", false);
     static final List<Allele> ALL_ALLELES = Arrays.asList(REF_ALLELE, DEL_ALLELE, DUP_ALLELE);
 
     protected final VariantContextWriter outputWriter;

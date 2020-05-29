@@ -19,6 +19,7 @@ import org.broadinstitute.hellbender.engine.ReadsContext;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.copynumber.gcnv.GermlineCNVSegmentVariantComposer;
+import org.broadinstitute.hellbender.tools.copynumber.gcnv.GermlineCNVVariantComposer;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFHeaderLines;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
@@ -37,7 +38,7 @@ import java.util.stream.Collectors;
 
 @BetaFeature
 @CommandLineProgramProperties(
-        summary = "Gathers single-sample segmented gCNV VCFs, harmonizes breakpoints, and outputs a cohort VCF with genotypes.",
+        summary = "Gathers single-sample segmented gCNV VCFs, harmonizes breakpoints, and outputs a cohort VCF with genotypes.  Note that this tool assumes ploidy 2.",
         oneLineSummary = "Combined single-sample segmented gCNV VCFs.",
         programGroup = StructuralVariantDiscoveryProgramGroup.class
 )
@@ -152,17 +153,21 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
         ArrayList<VariantContext> overlappingVCs = new ArrayList<>();
         VariantContext prev = it.next();
         overlappingVCs.add(prev);
+        int clusterEnd = prev.getEnd();
         //gather groups of overlapping VCs and update the genotype copy numbers appropriately
         while (it.hasNext()) {
             final VariantContext curr = it.next();
-            if (IntervalUtils.overlaps(prev, curr)) {
+            if (curr.getStart() < clusterEnd) {
                 overlappingVCs.add(curr);
-                prev = curr;
+                if (curr.getEnd() > clusterEnd) {
+                    clusterEnd = curr.getEnd();
+                }
             } else {
                 final List<VariantContext> resolvedVCs = resolveVariantContexts(overlappingVCs);
                 for (final VariantContext vc : resolvedVCs) { vcfWriter.add(vc); }
-                prev = curr;
                 overlappingVCs = new ArrayList<>();
+                overlappingVCs.add(curr);
+                clusterEnd = curr.getEnd();
             }
         }
     }
@@ -177,16 +182,21 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
         Utils.nonNull(overlappingVCs);
         final List<VariantContext> resolvedVCs = new ArrayList<>();
         final Iterator<VariantContext> it = overlappingVCs.iterator();
+
         final Map<String, MutablePair<Integer, Integer>> sampleCopyNumbers = new LinkedHashMap<>();  //sampleName, copyNumber, endPos -- it's safe to just use position because if the VCs overlap then they must be on the same contig
         while (it.hasNext()) {
             final VariantContext curr = it.next();
+            //TODO: can we iterate over genotypes for consistency?
             for (final String s : curr.getSampleNames()) {
+                //if this sample is in the table and we have a new variant for this sample, update the table
+                //TODO: is it better to remove the sample?
                 if (sampleCopyNumbers.containsKey(s) && sampleCopyNumbers.get(s).getLeft() != Integer.parseInt(curr.getGenotype(s).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString())) {
-                    int end = sampleCopyNumbers.get(s).getRight();
                     sampleCopyNumbers.get(s).setRight(Integer.parseInt(curr.getGenotype(s).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString()));
+                    sampleCopyNumbers.get(s).setLeft(curr.getEnd());
                 }
             }
             resolvedVCs.add(updateGenotypes(curr, sampleCopyNumbers));
+            //update copy number table for subsequent VCs using variants genotypes from input VCs
             for (final Genotype g : curr.getGenotypes()) {
                 if (g.hasAnyAttribute(GermlineCNVSegmentVariantComposer.CN)) {
                     sampleCopyNumbers.put(g.getSampleName(), new MutablePair<>(Integer.parseInt(g.getExtendedAttribute(GermlineCNVSegmentVariantComposer.CN).toString()), curr.getAttributeAsInt(VCFConstants.END_KEY, curr.getStart())));
@@ -196,6 +206,12 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
         return resolvedVCs;
     }
 
+    /**
+     *
+     * @param vc
+     * @param sampleCopyNumbers may be modified to remove terminated variants
+     * @return
+     */
     private VariantContext updateGenotypes(final VariantContext vc, final Map<String, MutablePair<Integer, Integer>> sampleCopyNumbers) {
         final VariantContextBuilder builder = new VariantContextBuilder(vc);
         final List<Genotype> newGenotypes = new ArrayList<>();
@@ -203,13 +219,19 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
             if (!sampleCopyNumbers.containsKey(sample) && !vc.hasGenotype(sample)) {
                 final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(sample);
                 genotypeBuilder.alleles(Lists.newArrayList(Allele.REF_N, Allele.REF_N));
-                genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, HomoSapiensConstants.DEFAULT_PLOIDY);
+                genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, HomoSapiensConstants.DEFAULT_PLOIDY);  //NOTE: ploidy 2 assumption
                 newGenotypes.add(genotypeBuilder.make());
             } else {
                 final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(sample);
                 if (vc.hasGenotype(sample)) {
-                    genotypeBuilder.alleles(vc.getGenotype(sample).getAlleles());
-                    genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, vc.getGenotype(sample).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, HomoSapiensConstants.DEFAULT_PLOIDY));
+                    final int copyNumber = Integer.parseInt(vc.getGenotype(sample).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, HomoSapiensConstants.DEFAULT_PLOIDY).toString());
+                    //only for CN=1 can we be sure there's no ref allele
+                    if (copyNumber == 0) {
+                        genotypeBuilder.alleles(Arrays.asList(GermlineCNVVariantComposer.DEL_ALLELE, GermlineCNVVariantComposer.DEL_ALLELE));
+                    } else {
+                        genotypeBuilder.alleles(vc.getGenotype(sample).getAlleles()); //will get an extra ref when converted to diploid
+                    }
+                    genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, copyNumber);
                 } else {
                     genotypeBuilder.alleles(Lists.newArrayList(Allele.REF_N, Allele.REF_N));
                 }
@@ -217,7 +239,9 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
                     if (sampleCopyNumbers.get(sample).getRight() > vc.getStart()) {
                         genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, sampleCopyNumbers.get(sample).getLeft());
                     } else {
-                        genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, HomoSapiensConstants.DEFAULT_PLOIDY);
+                        if (!vc.hasGenotype(sample)) {
+                            genotypeBuilder.attribute(GermlineCNVSegmentVariantComposer.CN, HomoSapiensConstants.DEFAULT_PLOIDY);
+                        }
                         sampleCopyNumbers.remove(sample);
                     }
                 }
