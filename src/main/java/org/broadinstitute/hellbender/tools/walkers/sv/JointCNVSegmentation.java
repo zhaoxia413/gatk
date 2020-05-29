@@ -170,6 +170,9 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
                 clusterEnd = curr.getEnd();
             }
         }
+        //write out the last set of overlapping VCs
+        final List<VariantContext> resolvedVCs = resolveVariantContexts(overlappingVCs);
+        for (final VariantContext vc : resolvedVCs) { vcfWriter.add(vc); }
     }
 
     /**
