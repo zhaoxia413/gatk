@@ -121,6 +121,7 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
             currentContig = variantContexts.get(0).getContig(); //variantContexts should have identical start, so choose 0th arbitrarily
         } else if (!variantContexts.get(0).getContig().equals(currentContig)) {
             processClusters();
+            currentContig = variantContexts.get(0).getContig();
         }
         for (final VariantContext vc : variantContexts) {
             final SVCallRecord record = SVCallRecord.createDepthOnlyFromGCNV(vc, minQS);
@@ -151,13 +152,17 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
                 .collect(Collectors.toList());
         Iterator<VariantContext> it = sortedCalls.iterator();
         ArrayList<VariantContext> overlappingVCs = new ArrayList<>();
+        if (!it.hasNext()) {
+            return;
+        }
         VariantContext prev = it.next();
         overlappingVCs.add(prev);
         int clusterEnd = prev.getEnd();
+        String clusterContig = prev.getContig();
         //gather groups of overlapping VCs and update the genotype copy numbers appropriately
         while (it.hasNext()) {
             final VariantContext curr = it.next();
-            if (curr.getStart() < clusterEnd) {
+            if (curr.getStart() < clusterEnd && curr.getContig().equals(clusterContig)) {
                 overlappingVCs.add(curr);
                 if (curr.getEnd() > clusterEnd) {
                     clusterEnd = curr.getEnd();
@@ -168,6 +173,7 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
                 overlappingVCs = new ArrayList<>();
                 overlappingVCs.add(curr);
                 clusterEnd = curr.getEnd();
+                clusterContig = curr.getContig();
             }
         }
         //write out the last set of overlapping VCs

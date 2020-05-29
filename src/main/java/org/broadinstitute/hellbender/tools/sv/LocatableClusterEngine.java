@@ -146,7 +146,7 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
         for (final Tuple2<SimpleInterval, List<Long>> cluster : currentClusters) {
             final SimpleInterval clusterInterval = cluster._1;
             final List<Long> clusterItemIds = cluster._2;
-            if (item.getStart() > clusterInterval.getEnd()) {
+            if (getClusteringInterval(item, null).getStart() > clusterInterval.getEnd()) {
                 clusterIdsToProcess.add(clusterIndex);  //this cluster is complete -- process it when we're done
             } else {
                 if (clusteringType.equals(CLUSTERING_TYPE.MAX_CLIQUE)) {

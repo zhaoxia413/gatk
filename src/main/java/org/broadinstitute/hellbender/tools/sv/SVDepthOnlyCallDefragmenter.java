@@ -92,9 +92,17 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
             final int callEndIndex = genomicToBinMap.floorEntry(callEnd) == null ? genomicToBinMap.size() - 1 : genomicToBinMap.floorEntry(callEnd).getValue();
             final int callBinLength = callEndIndex - callStartIndex + 1;
             final int paddedStartIndex = Math.max(callStartIndex - (int)Math.round(callBinLength * PADDING_FRACTION), 0);
-            paddedCallStart = coverageIntervals.get(paddedStartIndex).getStart();
+            if (coverageIntervals.get(paddedStartIndex).getContig().equals(callStart.getContig())) {
+                paddedCallStart = coverageIntervals.get(paddedStartIndex).getStart();
+            } else {
+                paddedCallStart = callStart.getStart();
+            }
             final int paddedEndIndex = Math.min(callEndIndex + (int)Math.round(callBinLength * PADDING_FRACTION), genomicToBinMap.size() - 1);
-            paddedCallEnd = coverageIntervals.get(paddedEndIndex).getEnd();
+            if (coverageIntervals.get(paddedEndIndex).getContig().equals(callEnd.getContig())) {
+                paddedCallEnd = coverageIntervals.get(paddedEndIndex).getEnd();
+            } else {
+                paddedCallEnd = callEnd.getEnd();
+            }
         } else {
             paddedCallStart = (int) (callInterval.getStart() - PADDING_FRACTION * callInterval.getLengthOnReference());
             paddedCallEnd = (int) (callInterval.getEnd() + PADDING_FRACTION * callInterval.getLengthOnReference());
