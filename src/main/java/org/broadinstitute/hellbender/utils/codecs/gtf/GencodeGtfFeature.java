@@ -1346,6 +1346,9 @@ public abstract class GencodeGtfFeature implements Feature, Comparable<GencodeGt
         /** Transcript contains at least 1 non-canonical splice junction that is associated with a known or novel genome sequence */
         SEQUENCE_ERROR("sequence_error"),
 
+        /** Transcript whose coding sequence contains an internal stop codon that does not cause the translation termination. */
+        STOP_CODON_READTHROUGH("stop_codon_readthrough"),
+
         /** Transcript created or extended using assembled RNA-seq long reads. */
         TAGENE("TAGENE"),
 
