@@ -1133,6 +1133,7 @@ public abstract class GencodeGtfFeature implements Feature, Comparable<GencodeGt
      * For more information, see:
      *     https://www.gencodegenes.org/data_format.html
      *     https://en.wikipedia.org/wiki/General_feature_format
+     *     https://www.gencodegenes.org/pages/tags.html
      */
     public enum FeatureTag {
         /** 3' end extended based on RNA-seq data. */
@@ -1245,6 +1246,9 @@ public abstract class GencodeGtfFeature implements Feature, Comparable<GencodeGt
 
         /** the mRNA start could not be confirmed. */
         MRNA_START_NF("mRNA_start_NF"),
+
+        /** the transcript belongs to the MANE Select data set. The Matched Annotation from NCBI and EMBL-EBI project (MANE) is a collaboration between Ensembl-GENCODE and RefSeq to select a default transcript per human protein coding locus that is representative of biology, well-supported, expressed and conserved. This transcript set matches GRCh38 and is 100% identical between RefSeq and Ensembl-GENCODE for 5' UTR, CDS, splicing and 3' UTR. */
+        MANE_SELECT("MANE_Select"),
 
         /** in-frame type of variation where, at the acceptor site, some variants splice after the first AG and others after the */
         NAGNAG_SPLICE_SITE("NAGNAG_splice_site"),
