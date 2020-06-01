@@ -1342,6 +1342,9 @@ public abstract class GencodeGtfFeature implements Feature, Comparable<GencodeGt
         /** Transcript contains at least 1 non-canonical splice junction that is associated with a known or novel genome sequence */
         SEQUENCE_ERROR("sequence_error"),
 
+        /** Transcript created or extended using assembled RNA-seq long reads. */
+        TAGENE("TAGENE"),
+
         /** an upstream ATG exists when a downstream ATG is better supported. */
         UPSTREAM_ATG("upstream_ATG"),
 
