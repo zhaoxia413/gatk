@@ -1007,6 +1007,7 @@ public abstract class GencodeGtfFeature implements Feature, Comparable<GencodeGt
 
         // Long, intervening noncoding (linc) RNA that can be found in evolutionarily conserved, intergenic regions.
         LINCRNA("lincRNA"),
+        LNCRNA("lncRNA"),
 
         // Unspliced lncRNA that is several kb in size.
         MACRO_LNCRNA("macro_lncRNA"),
