@@ -88,9 +88,10 @@ function createConfigFile() {
 
     local dataSourceName=$1
     local version=$2
-    local srcFile=$3
-    local originLocation=$4
-    local fastaPath=$5
+    local refVersion=$3
+    local srcFile=$4
+    local originLocation=$5
+    local fastaPath=$6
 
     echo "name = ${dataSourceName}"
     echo "version = ${version}"
@@ -109,7 +110,11 @@ function createConfigFile() {
     echo "# Required field for GENCODE files."
     echo "# Path to the FASTA file from which to load the sequences for GENCODE transcripts:"
     echo "gencode_fasta_path = ${fastaPath}"
-    echo ""
+		echo ""
+    echo "# Required field for GENCODE files."
+    echo "# NCBI build version (either hg19 or hg38):"
+    echo "ncbi_build_version = ${refVersion}"
+		echo ""
     echo "# Required field for simpleXSV files."
     echo "# Valid values:"
     echo "#     GENE_NAME"
@@ -181,7 +186,7 @@ function getGencodeFiles()
     rm gencode.v${fileRefVersion}.annotation.gtf
 
     echo "Creating config file ..."
-    createConfigFile "${DATA_SOURCE_NAME}" "${version}" "gencode.v${fileRefVersion}.annotation.REORDERED.gtf" "${sourceUrl}" "gencode.v${fileRefVersion}.pc_transcripts.fa" > gencode.config
+    createConfigFile "${DATA_SOURCE_NAME}" "${version}" "${refVersion}" "gencode.v${fileRefVersion}.annotation.REORDERED.gtf" "${sourceUrl}" "gencode.v${fileRefVersion}.pc_transcripts.fa" > gencode.config
 
     if $HAS_SAMTOOLS ; then
         echo "Indexing Fasta File: gencode.v${fileRefVersion}.pc_transcripts.fa"
