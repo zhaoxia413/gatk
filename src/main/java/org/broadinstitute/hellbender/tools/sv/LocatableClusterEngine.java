@@ -59,7 +59,12 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
 
     public List<T> getOutput() {
         flushClusters();
-        final List<T> output = deduplicateItems(outputBuffer);
+        final List<T> output;
+        if (clusteringType == CLUSTERING_TYPE.MAX_CLIQUE) {
+            output = deduplicateItems(outputBuffer);
+        } else {
+            output = outputBuffer;
+        }
         outputBuffer.clear();
         return output;
     }
@@ -249,7 +254,7 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
         final T seed = validateItemIndex(seedId);
         final List<Long> existingCluster = currentClusters.get(existingClusterIndex)._2;
         final List<Long> validClusterIds = existingCluster.stream().filter(clusteringIds::contains).collect(Collectors.toList());
-        final List<Long> newCluster = new ArrayList<>(1 + existingCluster.size());
+        final List<Long> newCluster = new ArrayList<>(1 + validClusterIds.size());
         newCluster.addAll(validClusterIds);
         newCluster.add(seedId);
         currentClusters.add(new Tuple2<>(getClusteringInterval(seed, currentClusters.get(existingClusterIndex)._1), newCluster));

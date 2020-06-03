@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.tools.sv;
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.Genotype;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.utils.*;
 
@@ -121,7 +122,7 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
     // Not used for single-linkage clustering
     @Override
     protected boolean itemsAreIdentical(final SVCallRecordWithEvidence a, final SVCallRecordWithEvidence b) {
-        return false;
+        throw new GATKException.ShouldNeverReachHereException("Deduplication should not be called for single-linkage clustering in depth-only defragmentation.");
     }
 
     // Not used for single-linkage clustering

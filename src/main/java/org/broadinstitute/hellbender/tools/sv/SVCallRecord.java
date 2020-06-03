@@ -74,7 +74,7 @@ public class SVCallRecord implements Feature {
 
         //TODO : use new vcfs to get actual allele
         final int copyNumber = Integer.valueOf((String)variant.getGenotypes().get(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.CN));
-        if (copyNumber == 2) return null;
+        if (copyNumber == 2) { return null; }
         final boolean isDel = copyNumber < 2;
         final boolean startStrand = isDel ? true : false;
         final boolean endStrand = isDel ? false : true;
@@ -186,9 +186,12 @@ public class SVCallRecord implements Feature {
             return false;
         }
         final SVCallRecord b = (SVCallRecord) obj;
-        boolean areEqual = this.getContig().equals(b.getContig());
-        areEqual &= this.getStart() == b.getStart();
-        areEqual &= this.getStartStrand() == b.getStartStrand();
+
+        //quick check
+        if (!this.getContig().equals(b.getContig())) return false;
+        if (this.getStart() != b.getStart()) return false;
+
+        boolean areEqual = this.getStartStrand() == b.getStartStrand();
 
         areEqual &= this.getEndContig() == b.getEndContig();
         areEqual &= this.getEnd() == b.getEnd();

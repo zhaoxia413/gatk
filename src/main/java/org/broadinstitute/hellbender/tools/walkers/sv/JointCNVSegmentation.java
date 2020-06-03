@@ -55,6 +55,7 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
 
     public static final String MIN_QUALITY_LONG_NAME = "minimum-qs-score";
     public static final String MODEL_CALL_INTERVALS = "model-call-intervals";
+    public static final String BREAKPOINT_SUMMARY_STRATEGY = "breakpoint-summary-strategy";
 
     @Argument(fullName = MIN_QUALITY_LONG_NAME, doc = "Minimum QS score to combine a variant segment")
     private int minQS = 20;
@@ -62,17 +63,23 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
     @Argument(fullName = MODEL_CALL_INTERVALS, doc = "Intervals used for gCNV calls.  Should be preprocessed and filtered to line up with model calls. Required for exomes.")
     private File modelCallIntervalList;
 
+    @Argument(fullName = BREAKPOINT_SUMMARY_STRATEGY, doc = "Strategy to use for choosing a representative value for a breakpoint cluster.")
+    private SVClusterEngine.BreakpointSummaryStrategy breakpointSummaryStrategy = SVClusterEngine.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END;
+
     @Argument(fullName= StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName=StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="The combined output file", optional=false)
     private File outputFile;
 
     @Override
+    public boolean requiresReference() {
+        return true;
+    }
+
+    @Override
     public void onTraversalStart() {
         dictionary = getBestAvailableSequenceDictionary();
-        if (dictionary == null) {
-            throw new UserException("Reference sequence dictionary required");
-        }
+        //dictionary will not be null because this tool requiresReference()
 
         final GenomeLocParser parser = new GenomeLocParser(this.dictionary);
 
@@ -85,7 +92,7 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
         }
 
         defragmenter = new SVDepthOnlyCallDefragmenter(dictionary, 0.8, callIntervals);
-        clusterEngine = new SVClusterEngine(dictionary, true);
+        clusterEngine = new SVClusterEngine(dictionary, true, breakpointSummaryStrategy);
 
         vcfWriter = getVCFWriter();
     }
