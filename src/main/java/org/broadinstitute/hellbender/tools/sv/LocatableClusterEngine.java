@@ -62,10 +62,10 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
         final List<T> output;
         if (clusteringType == CLUSTERING_TYPE.MAX_CLIQUE) {
             output = deduplicateItems(outputBuffer);
-            outputBuffer.clear();
         } else {
-            output = outputBuffer;
+            output = new ArrayList<>(outputBuffer);
         }
+        outputBuffer.clear();
         return output;
     }
 
