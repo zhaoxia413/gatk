@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
+import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFHeader;
 import org.apache.commons.lang3.tuple.Pair;
@@ -7,6 +8,7 @@ import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -32,6 +34,31 @@ public class JointCNVSegmentationIntegrationTest extends CommandLineProgramTest 
     public Object[][] postprocessOutputs() {
         return new Object[][] {
                new Object[]{SEGMENTS_VCF_CORRECT_OUTPUTS}
+        };
+    }
+
+    @DataProvider
+    public Object[][] overlappingSamples() {
+        return new Object[][] {
+            new Object[] {
+                    Arrays.asList(new File(getToolTestDataDir() + "HG00365.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "HG01623.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "HG01789.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "HG02165.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "HG02221.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA07357.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA11829.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA12005.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA12046.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA12814.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA12873.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA18946.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA18997.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA19428.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA19456.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA20502.overlaps.vcf.gz"),
+                    new File(getToolTestDataDir() + "NA21120.overlaps.vcf.gz"))
+            }
         };
     }
 
@@ -65,5 +92,51 @@ public class JointCNVSegmentationIntegrationTest extends CommandLineProgramTest 
         //extra variant at X:227988
 
         //another test to make sure adjacent events with different copy numbers don't get merged/defragmented?
+    }
+
+    @Test
+    public void testDefragmentation() {
+        final File output = createTempFile("defragmented",".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder()
+                .addOutput(output)
+                .addReference(GATKBaseTest.b37Reference)
+                .addVCF(getToolTestDataDir() + "NA20533.fragmented.segments.vcf.gz")
+                .add(JointCNVSegmentation.MODEL_CALL_INTERVALS, getToolTestDataDir() + "intervals.chr13.interval_list")
+                .addInterval("13:52951204-115064572");
+
+        runCommandLine(args, JointCNVSegmentation.class.getSimpleName());
+
+        final Pair<VCFHeader, List<VariantContext>> defragmentedEvents = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
+        Assert.assertEquals(defragmentedEvents.getRight().size(), 1);
+        Assert.assertEquals(defragmentedEvents.getRight().get(0).getAttribute(GATKSVVCFConstants.SVLEN,0), 62113368);
+    }
+
+    @Test(dataProvider = "overlappingSamples")
+    public void testOverlappingEvents(final List<File> inputVcfs) {
+        final File output = createTempFile("overlaps", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder()
+                .addOutput(output)
+                .addReference(GATKBaseTest.b37Reference)
+                .add(JointCNVSegmentation.MODEL_CALL_INTERVALS, getToolTestDataDir() + "intervals.chr22.interval_list")
+                .addInterval("22:22,538,114-23,538,437");
+
+        inputVcfs.forEach(vcf -> args.addVCF(vcf));
+
+        runCommandLine(args, JointCNVSegmentation.class.getSimpleName());
+
+        final Pair<VCFHeader, List<VariantContext>> overlappingEvents = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
+        Assert.assertEquals(overlappingEvents.getRight().size(), 6);
+        //do copy number checks on genotypes
+        //at the start of the contig, all homRef genotypes should be CN2
+        final VariantContext vc0 = overlappingEvents.getRight().get(0);
+        for (final Genotype g : vc0.getGenotypes()) {
+            if (g.isHomRef()) {
+                Assert.assertEquals(Integer.parseInt(g.getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString()), 2);
+            } else {
+                Assert.assertNotEquals(Integer.parseInt(g.getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString()), 2);
+            }
+        }
     }
 }
