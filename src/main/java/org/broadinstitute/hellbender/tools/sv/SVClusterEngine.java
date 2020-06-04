@@ -90,12 +90,12 @@ public class SVClusterEngine extends LocatableClusterEngine<SVCallRecordWithEvid
                     newEnd = medianEnd;
                     break;
                 case MIN_START_MAX_END:
-                    newStart = startPositions.stream().min(Integer::compareTo).orElse(-1);
-                    newEnd = endPositions.stream().max(Integer::compareTo).orElse(-1);
+                    newStart = startPositions.stream().min(Integer::compareTo).orElse(startPositions.get(0));
+                    newEnd = endPositions.stream().max(Integer::compareTo).orElse(endPositions.get(0));
                     break;
                 case MAX_START_MIN_END:
-                    newStart = startPositions.stream().max(Integer::compareTo).orElse(-1);
-                    newEnd = endPositions.stream().min(Integer::compareTo).orElse(-1);
+                    newStart = startPositions.stream().max(Integer::compareTo).orElse(startPositions.get(0));
+                    newEnd = endPositions.stream().min(Integer::compareTo).orElse(endPositions.get(0));
                     break;
                 case MEAN_START_MEAN_END:
                     newStart = (int)Math.round(new Mean().evaluate(Doubles.toArray(startPositions)));

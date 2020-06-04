@@ -82,7 +82,7 @@ public class SVCallRecord implements Feature {
 
         final String startContig = variant.getContig();
         final int start = variant.getStart();
-        final int end = variant.getEnd() + 1; // TODO this is a bug with gCNV vcf generation
+        final int end = variant.getEnd();
         final int length = end - start;
         return new SVCallRecord(startContig, start, startStrand, startContig, end, endStrand, type, length, algorithms, passing);
     }
@@ -170,11 +170,11 @@ public class SVCallRecord implements Feature {
     }
 
     public SimpleInterval getStartAsInterval() {
-        return new SimpleInterval(startContig, start, start + 1);
+        return new SimpleInterval(startContig, start, start);
     }
 
     public SimpleInterval getEndAsInterval() {
-        return new SimpleInterval(endContig, end, end + 1);
+        return new SimpleInterval(endContig, end, end);
     }
 
     @Override

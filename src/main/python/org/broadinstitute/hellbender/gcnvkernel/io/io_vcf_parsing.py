@@ -61,7 +61,7 @@ def read_sample_segments_and_calls(intervals_vcf: str,
                 raise
         # once start matches, move the interval end
         while end_interval is not None and try_getting_info_attribute(segments_rec, 'END') > \
-                try_getting_info_attribute(end_interval, 'END') + 1:  # some sort of gCNV off-by-one error
+                try_getting_info_attribute(end_interval, 'END'):
             try:
                 end_interval = next(interval_end_iter)
                 segment_end_index += 1
