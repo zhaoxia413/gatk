@@ -180,7 +180,7 @@ function getGencodeFiles()
 
     # We must fix the information in the gencode gtf file:
     echo "Reordering Gencode GTF data ..."
-    ${SCRIPTDIR}/fixGencodeOrdering.py gencode.v${fileRefVersion}.annotation.gtf > gencode.v${fileRefVersion}.annotation.REORDERED.gtf
+    ${SCRIPTDIR}/fixGencodeOrdering.py gencode.v${fileRefVersion}.annotation.gtf | sed -e '1,5s$^#\([a-z]\)$##\1$' > gencode.v${fileRefVersion}.annotation.REORDERED.gtf
 
     # Clean up original file:
     rm gencode.v${fileRefVersion}.annotation.gtf

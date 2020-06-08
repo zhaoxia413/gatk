@@ -221,7 +221,14 @@ public abstract class GencodeGtfFeature implements Feature, Comparable<GencodeGt
                     optionalField = new OptionalField<>(fieldName, fieldValue);
                     break;
                 case "remap_original_location":
-                    optionalField = new OptionalField<>(fieldName, Long.valueOf(fieldValue));
+                    try {
+                        optionalField = new OptionalField<>(fieldName, Long.valueOf(fieldValue));
+                    }
+                    catch (final NumberFormatException nfe) {
+                        // We must have gotten a field that has a different format.
+                        // For now, just copy it over:
+                        optionalField = new OptionalField<>(fieldName, fieldValue);
+                    }
                     break;
                 case "remap_num_mappings":
                     optionalField = new OptionalField<>(fieldName, Long.valueOf(fieldValue));
