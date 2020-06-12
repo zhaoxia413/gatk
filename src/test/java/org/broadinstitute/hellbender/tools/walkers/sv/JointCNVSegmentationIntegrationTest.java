@@ -68,7 +68,9 @@ public class JointCNVSegmentationIntegrationTest extends CommandLineProgramTest 
 
         final ArgumentsBuilder args = new ArgumentsBuilder()
                 .addOutput(output)
-                .addReference(GATKBaseTest.b37Reference);
+                .addReference(GATKBaseTest.b37Reference)
+                .add(JointCNVSegmentation.MODEL_CALL_INTERVALS, getToolTestDataDir() + "threeSamples.interval_list")
+                .addIntervals(new File(getToolTestDataDir() + "threeSamples.interval_list"));
 
         inputVcfs.forEach(vcf -> args.addVCF(vcf));
 
@@ -82,7 +84,9 @@ public class JointCNVSegmentationIntegrationTest extends CommandLineProgramTest 
         final ArgumentsBuilder args2 = new ArgumentsBuilder()
                 .addOutput(output2)
                 .addReference(GATKBaseTest.b37Reference)
-                .add(JointCNVSegmentation.MIN_QUALITY_LONG_NAME, 0);
+                .add(JointCNVSegmentation.MIN_QUALITY_LONG_NAME, 0)
+                .add(JointCNVSegmentation.MODEL_CALL_INTERVALS, getToolTestDataDir() + "threeSamples.interval_list")
+                .addIntervals(new File(getToolTestDataDir() + "threeSamples.interval_list"));
         inputVcfs.forEach(vcf -> args2.addVCF(vcf));
 
         runCommandLine(args2, JointCNVSegmentation.class.getSimpleName());
@@ -109,7 +113,7 @@ public class JointCNVSegmentationIntegrationTest extends CommandLineProgramTest 
 
         final Pair<VCFHeader, List<VariantContext>> defragmentedEvents = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
         Assert.assertEquals(defragmentedEvents.getRight().size(), 1);
-        Assert.assertEquals(defragmentedEvents.getRight().get(0).getAttribute(GATKSVVCFConstants.SVLEN,0), 62113368);
+        Assert.assertEquals(defragmentedEvents.getRight().get(0).getAttributeAsInt(GATKSVVCFConstants.SVLEN,0), 62113368);
     }
 
     @Test(dataProvider = "overlappingSamples")
@@ -138,5 +142,7 @@ public class JointCNVSegmentationIntegrationTest extends CommandLineProgramTest 
                 Assert.assertNotEquals(Integer.parseInt(g.getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString()), 2);
             }
         }
+
+        //TODO: more procedural checks
     }
 }

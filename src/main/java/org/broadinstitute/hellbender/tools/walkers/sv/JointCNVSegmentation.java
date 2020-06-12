@@ -77,6 +77,11 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
     }
 
     @Override
+    public boolean doDictionaryCrossValidation() {
+        return false;
+    }
+
+    @Override
     public void onTraversalStart() {
         dictionary = getBestAvailableSequenceDictionary();
         //dictionary will not be null because this tool requiresReference()

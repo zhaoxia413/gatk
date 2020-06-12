@@ -4,6 +4,7 @@ import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.Genotype;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.utils.*;
 
@@ -89,8 +90,14 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
         if (genomicToBinMap != null) {
             final GenomeLoc callStart = parser.createGenomeLoc(call.getContig(), call.getStart(), call.getStart());
             final GenomeLoc callEnd = parser.createGenomeLoc(call.getContig(), call.getEnd(), call.getEnd());
-            final int callStartIndex = genomicToBinMap.ceilingEntry(callStart) == null ? 0 : genomicToBinMap.ceilingEntry(callStart) .getValue();
-            final int callEndIndex = genomicToBinMap.floorEntry(callEnd) == null ? genomicToBinMap.size() - 1 : genomicToBinMap.floorEntry(callEnd).getValue();
+            if (genomicToBinMap.ceilingEntry(callStart) == null) {
+                throw new UserException.BadInput("Call start " + callStart + " for  call " + call.prettyPrint() + " not found in model call intervals.");
+            }
+            final int callStartIndex = genomicToBinMap.ceilingEntry(callStart).getValue();
+            if (genomicToBinMap.floorEntry(callEnd) == null) {
+                throw new UserException.BadInput("Call end " + callEnd + " for call " + call.prettyPrint() + " not found in model call intervals.");
+            }
+            final int callEndIndex = genomicToBinMap.floorEntry(callEnd).getValue();
             final int callBinLength = callEndIndex - callStartIndex + 1;
             final int paddedStartIndex = Math.max(callStartIndex - (int)Math.round(callBinLength * PADDING_FRACTION), 0);
             if (coverageIntervals.get(paddedStartIndex).getContig().equals(callStart.getContig())) {
@@ -108,15 +115,14 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
             paddedCallStart = (int) (callInterval.getStart() - PADDING_FRACTION * callInterval.getLengthOnReference());
             paddedCallEnd = (int) (callInterval.getEnd() + PADDING_FRACTION * callInterval.getLengthOnReference());
         }
-        final String currentContig = getCurrentContig();
-        final int contigLength = dictionary.getSequence(currentContig).getSequenceLength();
+        final int contigLength = dictionary.getSequence(call.getContig()).getSequenceLength();
         if (currentClusterInterval == null) {
-            return IntervalUtils.trimIntervalToContig(currentContig, paddedCallStart, paddedCallEnd, contigLength);
+            return IntervalUtils.trimIntervalToContig(call.getContig(), paddedCallStart, paddedCallEnd, contigLength);
         }
         //NOTE: this is an approximation -- padding should be based on the length of the call plus currentClusterIntervals
         final int newMinStart = Math.min(paddedCallStart, currentClusterInterval.getStart());
         final int newMaxEnd = Math.max(paddedCallEnd, currentClusterInterval.getEnd());
-        return IntervalUtils.trimIntervalToContig(currentContig, newMinStart, newMaxEnd, contigLength);
+        return IntervalUtils.trimIntervalToContig(call.getContig(), newMinStart, newMaxEnd, contigLength);
     }
 
     // Not used for single-linkage clustering

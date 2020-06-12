@@ -22,12 +22,6 @@ public class SVDepthOnlyCallDefragmenterTest {
     final private static GenomeLocParser glParser = new GenomeLocParser(SVTestUtils.dict);
     final static SVDepthOnlyCallDefragmenter singleSampleDefragmenter = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, 0.0, SVTestUtils.targetIntervals);
 
-    @BeforeTest
-    public void initializeDefragmenters() {
-        defaultDefragmenter.add(SVTestUtils.call1);
-        singleSampleDefragmenter.add(SVTestUtils.call1);
-    }
-
     @Test
     public void testFlattenCluster() {
         final SVCallRecordWithEvidence call1FlattenedDefault = defaultDefragmenter.flattenCluster(Collections.singletonList(SVTestUtils.call1));
@@ -61,10 +55,11 @@ public class SVDepthOnlyCallDefragmenterTest {
     public Object[][] clusterTogetherInputsSingleSample() {
         return new Object[][] {
                 {SVTestUtils.call1, SVTestUtils.call1, true},
-                {SVTestUtils.call1, SVTestUtils.call2, true},
+                {SVTestUtils.call1, SVTestUtils.call2, true},  //overlapping, same samples
                 {SVTestUtils.call1, SVTestUtils.nonDepthOnly, false},
                 {SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch, true},
-                {SVTestUtils.call1, SVTestUtils.nonDepthOnly, false}
+                {SVTestUtils.call1, SVTestUtils.nonDepthOnly, false},
+                {SVTestUtils.call1_CN1, SVTestUtils.call2_CN0, false}  //overlapping, but different copy number
         };
     }
 
