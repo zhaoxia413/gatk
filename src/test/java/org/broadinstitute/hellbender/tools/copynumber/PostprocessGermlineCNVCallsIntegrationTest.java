@@ -167,6 +167,7 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
         runCommandLine(args);
     }
 
+    //TODO: fix this -- what is it supposed to do?
     @Test(expectedExceptions = IllegalArgumentException.class, groups = {"python"})
     public void testBadAutosomalContigs() {
         final ArgumentsBuilder args = getArgsForSingleSample(CALL_SHARDS, MODEL_SHARDS, 0,
@@ -175,6 +176,7 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
                 createTempFile("denoised-copy-ratios-output", ".tsv"),
                 Collections.singletonList("Z"), /* unknown contig */
                 AUTOSOMAL_REF_COPY_NUMBER);
+        runCommandLine(args);
     }
 
     @Test(groups = {"python"})
@@ -184,7 +186,7 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
                 createTempFile("intervals-output-vcf", ".vcf"),
                 segmentsOutput,
                 createTempFile("denoised-copy-ratios-output", ".tsv"),
-                ALLOSOMAL_CONTIGS, 2, COMBINED_INTERVALS_VCF, CLUSTERED_VCF);
+                ALLOSOMAL_CONTIGS, 2, new File(TEST_SUB_DIR, "intervals_output_SAMPLE_000.vcf.gz"), CLUSTERED_VCF);
         runCommandLine(args);
         //TODO: check stuff
         final Pair<VCFHeader, List<VariantContext>> output = VariantContextTestUtils.readEntireVCFIntoMemory(segmentsOutput.getAbsolutePath());
