@@ -1,14 +1,20 @@
 package org.broadinstitute.hellbender.tools.copynumber;
 
+import apple.laf.JRSUIConstants;
 import htsjdk.samtools.util.FileExtensions;
+import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.VariantContext;
+import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.vcf.VCFHeader;
 import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.copynumber.gcnv.GermlineCNVSegmentVariantComposer;
+import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -20,6 +26,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.BiConsumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
@@ -29,6 +39,24 @@ import java.util.stream.IntStream;
  * @author Andrey Smirnov &lt;asmirnov@broadinstitute.org&gt;
  */
 public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLineProgramTest {
+    private static final BiConsumer<VariantContext, VariantContext> CHECK_VC_START = (actual, expected) ->
+            Assert.assertEquals(actual.getStart(), expected.getStart());
+
+    private static final BiConsumer<VariantContext, VariantContext> CHECK_VC_END = (actual, expected) -> {
+            Assert.assertTrue(actual.hasAttribute(VCFConstants.END_KEY));
+            Assert.assertTrue(expected.hasAttribute(VCFConstants.END_KEY));
+            Assert.assertEquals(actual.getAttributeAsInt(VCFConstants.END_KEY, -1), expected.getAttributeAsInt(VCFConstants.END_KEY, -1));
+        };
+
+    private static final Predicate<VariantContext> HAS_EXPECTED_ATTRIBUTES = vc -> {
+        Genotype g = vc.getGenotype(0);
+        return g.hasAnyAttribute(GermlineCNVSegmentVariantComposer.CN) &&
+        g.hasAnyAttribute(GermlineCNVSegmentVariantComposer.QS) &&
+        g.hasAnyAttribute(GermlineCNVSegmentVariantComposer.QA) &&
+        g.hasAnyAttribute(GermlineCNVSegmentVariantComposer.QSE) &&
+        g.hasAnyAttribute(GermlineCNVSegmentVariantComposer.QSS);
+    };
+
     private static final File TEST_SUB_DIR = new File(toolsTestDir, "copynumber/gcnv-postprocess");
 
     private static final List<String> CALL_SHARDS = Arrays.asList(
@@ -167,7 +195,6 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
         runCommandLine(args);
     }
 
-    //TODO: fix this -- what is it supposed to do?
     @Test(expectedExceptions = IllegalArgumentException.class, groups = {"python"})
     public void testBadAutosomalContigs() {
         final ArgumentsBuilder args = getArgsForSingleSample(CALL_SHARDS, MODEL_SHARDS, 0,
@@ -181,15 +208,73 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
 
     @Test(groups = {"python"})
     public void testQualScoreCalculationWithBreakpoints() {
-        final File segmentsOutput = createTempFile("segments-output-vcf", ".vcf");
+        //run one all-reference sample
+        final File segmentsOutput = createTempFile("segments-output-vcf-0", ".vcf");
         final ArgumentsBuilder args = getArgsWithBreakpoints(CALL_SHARDS, MODEL_SHARDS, 0,
                 createTempFile("intervals-output-vcf", ".vcf"),
                 segmentsOutput,
                 createTempFile("denoised-copy-ratios-output", ".tsv"),
                 ALLOSOMAL_CONTIGS, 2, new File(TEST_SUB_DIR, "intervals_output_SAMPLE_000.vcf.gz"), CLUSTERED_VCF);
         runCommandLine(args);
-        //TODO: check stuff
+
+        //...and one sample with variants
+        final File segmentsOutput2 = createTempFile("segments-output-vcf", ".vcf");
+        final ArgumentsBuilder args2 = getArgsWithBreakpoints(CALL_SHARDS, MODEL_SHARDS, 1,
+                createTempFile("intervals-output-vcf", ".vcf"),
+                segmentsOutput2,
+                createTempFile("denoised-copy-ratios-output", ".tsv"),
+                ALLOSOMAL_CONTIGS, 2, new File(TEST_SUB_DIR, "intervals_output_SAMPLE_001.vcf.gz"), CLUSTERED_VCF);
+        runCommandLine(args2);
+
         final Pair<VCFHeader, List<VariantContext>> output = VariantContextTestUtils.readEntireVCFIntoMemory(segmentsOutput.getAbsolutePath());
+        final Pair<VCFHeader, List<VariantContext>> output2 = VariantContextTestUtils.readEntireVCFIntoMemory(segmentsOutput2.getAbsolutePath());
+        final Pair<VCFHeader, List<VariantContext>> sample001Segments = VariantContextTestUtils.readEntireVCFIntoMemory(SEGMENTS_VCF_CORRECT_OUTPUTS.get(1).getAbsolutePath());
+        final Pair<VCFHeader, List<VariantContext>> clusteredBreakpoints = VariantContextTestUtils.readEntireVCFIntoMemory(CLUSTERED_VCF.getAbsolutePath());
+        Assert.assertEquals(output.getRight().size(), clusteredBreakpoints.getRight().size());
+        Assert.assertEquals(output2.getRight().size(), clusteredBreakpoints.getRight().size());
+        Assert.assertTrue(output.getRight().stream().allMatch(HAS_EXPECTED_ATTRIBUTES));
+        Assert.assertTrue(output2.getRight().stream().allMatch(HAS_EXPECTED_ATTRIBUTES));
+
+        //clustered VCF starts with chromosome 2 because all samples are ref over chr 1
+        Assert.assertEquals(clusteredBreakpoints.getRight().get(0).getContig(), output.getRight().get(0).getContig());
+
+        //sample0 is all reference
+        Assert.assertTrue(output.getRight().stream().allMatch(vc -> vc.getGenotypes().get(0).isHomRef()));
+
+        //all VCs should have matching start and end
+        GATKBaseTest.assertCondition(clusteredBreakpoints.getRight(), output.getRight(), CHECK_VC_START);
+        GATKBaseTest.assertCondition(clusteredBreakpoints.getRight(), output.getRight(), CHECK_VC_END);
+        GATKBaseTest.assertCondition(clusteredBreakpoints.getRight(), output2.getRight(), CHECK_VC_START);
+        GATKBaseTest.assertCondition(clusteredBreakpoints.getRight(), output2.getRight(), CHECK_VC_END);
+
+        //sample001 has a del and a dup on chromosome 2
+        Assert.assertTrue(output2.getRight().stream().anyMatch(vc -> vc.getContig().equals("2") &&
+                vc.getAlternateAllele(0).equals(GermlineCNVSegmentVariantComposer.DEL_ALLELE) && vc.getGenotypes().get(0).isHomVar() && //calls are "haploid"
+                vc.getGenotype(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString().equals("0")));
+        Assert.assertTrue(output2.getRight().stream().anyMatch(vc -> vc.getContig().equals("2") &&
+                vc.getAlternateAllele(0).equals(GermlineCNVSegmentVariantComposer.DUP_ALLELE) && vc.getGenotypes().get(0).isHomVar() && //calls are "haploid"
+                vc.getGenotype(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString().equals("4")));
+
+        //compare sample001 with new QUALs against its single-sample segmented results
+        // should have same Q score where breakpoints match, zero if breakpoint was moved in clustering
+        for (final VariantContext segment : sample001Segments.getRight()) {
+            if (segment.isVariant()) {
+                final List<VariantContext> matches = output2.getRight().stream().filter(vc -> vc.getStart() == segment.getStart()).collect(Collectors.toList());
+                if (matches.size() == 1) {
+                    Assert.assertEquals(segment.getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.CN), matches.get(0).getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.CN));
+                    Assert.assertEquals(segment.getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.QSS), matches.get(0).getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.QSS));
+                    GATKBaseTest.assertEqualsIntSmart(Integer.parseInt(segment.getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.QS).toString()),
+                            Integer.parseInt(matches.get(0).getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.QS).toString()), 2,  //I've seen some wiggle in a few variants
+                            "QS score varies by more than 2.");
+                    if (matches.get(0).getAttribute(VCFConstants.END_KEY).equals(segment.getAttribute(VCFConstants.END_KEY))) {
+                        Assert.assertEquals(segment.getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.QSE), matches.get(0).getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.QSE));
+                        Assert.assertEquals(segment.getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.NP), matches.get(0).getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.NP));
+                    } else {
+                        Assert.assertEquals(Integer.parseInt(matches.get(0).getGenotype(0).getExtendedAttribute(GermlineCNVSegmentVariantComposer.QSE).toString()), 0);
+                    }
+                }
+            }
+        }
     }
 
     @DataProvider(name = "differentValidInput")
