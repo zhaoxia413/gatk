@@ -56,8 +56,7 @@ public abstract class AbstractLocatableCollection<METADATA extends LocatableMeta
                                 final Function<DataLine, RECORD> recordFromDataLineDecoder,
                                 final BiConsumer<RECORD, DataLine> recordToDataLineEncoder) {
         super(inputFile, mandatoryColumns, recordFromDataLineDecoder, recordToDataLineEncoder);
-        //TODO: put this back
-        //CopyNumberArgumentValidationUtils.validateIntervals(getRecords(), getMetadata().getSequenceDictionary());
+        CopyNumberArgumentValidationUtils.validateIntervals(getRecords(), getMetadata().getSequenceDictionary());
         this.overlapDetector = new Lazy<>(() -> OverlapDetector.create(getRecords()));
     }
 
