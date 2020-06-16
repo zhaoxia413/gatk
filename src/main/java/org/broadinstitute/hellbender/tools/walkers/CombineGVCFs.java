@@ -16,6 +16,7 @@ import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.argumentcollections.DbsnpArgumentCollection;
 import org.broadinstitute.hellbender.cmdline.programgroups.ShortVariantDiscoveryProgramGroup;
+import org.broadinstitute.hellbender.engine.GATKPath;
 import org.broadinstitute.hellbender.engine.MultiVariantWalkerGroupedOnStart;
 import org.broadinstitute.hellbender.engine.ReadsContext;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
@@ -30,7 +31,6 @@ import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
-import java.io.File;
 import java.util.*;
 
 /**
@@ -90,7 +90,7 @@ public final class CombineGVCFs extends MultiVariantWalkerGroupedOnStart {
     @Argument(fullName= StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName=StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="The combined GVCF output file", optional=false)
-    private File outputFile;
+    private GATKPath outputFile;
 
     @Argument(fullName=BP_RES_LONG_NAME, doc = "If specified, convert banded gVCFs to all-sites gVCFs", optional=true)
     protected boolean useBpResolution = false;
@@ -302,7 +302,7 @@ public final class CombineGVCFs extends MultiVariantWalkerGroupedOnStart {
             }
         }
 
-        VariantContextWriter writer = createVCFWriter(outputFile);
+        final VariantContextWriter writer = createVCFWriter(outputFile);
 
         final Set<String> sampleNameSet = new IndexedSampleList(samples).asSetOfSamples();
         final VCFHeader vcfHeader = new VCFHeader(headerLines, new TreeSet<>(sampleNameSet));
