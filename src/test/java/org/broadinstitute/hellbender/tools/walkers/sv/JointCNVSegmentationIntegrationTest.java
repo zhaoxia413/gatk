@@ -113,7 +113,7 @@ public class JointCNVSegmentationIntegrationTest extends CommandLineProgramTest 
 
         final Pair<VCFHeader, List<VariantContext>> defragmentedEvents = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
         Assert.assertEquals(defragmentedEvents.getRight().size(), 1);
-        Assert.assertEquals(defragmentedEvents.getRight().get(0).getAttributeAsInt(GATKSVVCFConstants.SVLEN,0), 62113368);
+        Assert.assertEquals(defragmentedEvents.getRight().get(0).getAttributeAsInt(GATKSVVCFConstants.SVLEN,0), 62113369);
     }
 
     @Test(dataProvider = "overlappingSamples")

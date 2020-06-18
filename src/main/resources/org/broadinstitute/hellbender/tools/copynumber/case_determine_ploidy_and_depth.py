@@ -126,4 +126,4 @@ if __name__ == "__main__":
     # sample sample-specific posteriors
     gcnvkernel.io_ploidy.SamplePloidyWriter(
         ploidy_config, ploidy_workspace, ploidy_task.continuous_model,
-        ploidy_task.continuous_model_approx, args.output_calls_path)()
+        ploidy_task.continuous_model_approx, args.ploidy_correction_gq_threshold, args.output_calls_path)()

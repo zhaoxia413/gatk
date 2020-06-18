@@ -416,8 +416,8 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
 
         /* parse segments */
         final File copyNumberSegmentsFile = getCopyNumberSegmentsFile(pythonScriptOutputPath, sampleIndex);
-        final IntegerCopyNumberSegmentCollection integerCopyNumberSegmentCollection =
-                new IntegerCopyNumberSegmentCollection(copyNumberSegmentsFile);
+        final NonOverlappingIntegerCopyNumberSegmentCollection integerCopyNumberSegmentCollection =
+                new NonOverlappingIntegerCopyNumberSegmentCollection(copyNumberSegmentsFile);
         final String sampleNameFromSegmentCollection = integerCopyNumberSegmentCollection
                 .getMetadata().getSampleName();
         Utils.validate(sampleNameFromSegmentCollection.equals(sampleName),

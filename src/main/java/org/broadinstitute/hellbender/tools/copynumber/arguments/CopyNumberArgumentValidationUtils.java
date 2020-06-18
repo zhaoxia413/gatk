@@ -48,7 +48,7 @@ public final class CopyNumberArgumentValidationUtils {
     }
 
     /**
-     * Validate that a list of locatables is valid and sorted according to a sequence dictionary and contains no duplicates or overlaps.
+     * Validate that a list of locatables is valid and sorted according to a sequence dictionary and contains no duplicates or overlaps (if applicable).
      */
     public static <T extends Locatable> void validateIntervals(final List<T> intervals,
                                                                final SAMSequenceDictionary sequenceDictionary) {
@@ -59,6 +59,12 @@ public final class CopyNumberArgumentValidationUtils {
         if (!Ordering.from(IntervalUtils.getDictionaryOrderComparator(sequenceDictionary)).isStrictlyOrdered(intervals)) {
             throw new IllegalArgumentException("Records were not strictly sorted in dictionary order.");
         }
+    }
+
+    /**
+     * Validate that a list of Locatables does not contain overlaps
+     */
+    public static <T extends Locatable> void validateNonOverlappingIntervals(final List<T> intervals) {
         final OptionalInt failureIndex = IntStream.range(1, intervals.size())
                 .filter(i -> IntervalUtils.overlaps(intervals.get(i - 1), intervals.get(i)))
                 .findFirst();
