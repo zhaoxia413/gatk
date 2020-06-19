@@ -50,7 +50,7 @@ matrix:
        env: SCALA_VERSION=2.12 TEST_TYPE=integration TEST_VERBOSITY=minimal
      - jdk: openjdk11
        language: java
-       env: SCALA_VERSION=2.12 TEST_TYPE=unit
+       env: SCALA_VERSION=2.12 TEST_TYPE=unit TEST_VERBOSITY=minimal
      - jdk: openjdk11
        language: java
        env: SCALA_VERSION=2.12 TEST_TYPE=cloud TESTS_REQUIRE_GCLOUD=true TEST_VERBOSITY=minimal
