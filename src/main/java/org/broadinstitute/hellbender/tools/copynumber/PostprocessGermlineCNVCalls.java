@@ -26,6 +26,7 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.io.Resource;
 import org.broadinstitute.hellbender.utils.python.PythonScriptExecutor;
+import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -432,7 +433,8 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
         final VariantContextWriter segmentsVCFWriter = createVCFWriter(outputSegmentsVCFFile);
         final GermlineCNVSegmentVariantComposer germlineCNVSegmentVariantComposer =
                 new GermlineCNVSegmentVariantComposer(segmentsVCFWriter, sampleName,
-                        refAutosomalIntegerCopyNumberState, allosomalContigSet);
+                        refAutosomalIntegerCopyNumberState, allosomalContigSet,
+                        ReferenceUtils.createReferenceReader(referenceArguments.getReferenceSpecifier()));
         germlineCNVSegmentVariantComposer.composeVariantContextHeader(sequenceDictionary, getDefaultToolVCFHeaderLines());
         germlineCNVSegmentVariantComposer.writeAll(integerCopyNumberSegmentCollection.getRecords());
         segmentsVCFWriter.close();
