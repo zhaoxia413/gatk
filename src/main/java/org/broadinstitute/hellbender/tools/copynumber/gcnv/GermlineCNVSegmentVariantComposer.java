@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.tools.copynumber.gcnv;
 
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.reference.ReferenceSequenceFile;
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.*;
@@ -10,6 +11,8 @@ import org.broadinstitute.hellbender.tools.copynumber.GermlineCNVCaller;
 import org.broadinstitute.hellbender.tools.copynumber.PostprocessGermlineCNVCalls;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.IntegerCopyNumberSegment;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
+import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
 import java.util.*;
 
@@ -55,6 +58,7 @@ public final class GermlineCNVSegmentVariantComposer extends GermlineCNVVariantC
 
     private final IntegerCopyNumberState refAutosomalCopyNumberState;
     private final Set<String> allosomalContigSet;
+    private final ReferenceSequenceFile reference;
 
     /**
      * Constructor.
@@ -64,14 +68,17 @@ public final class GermlineCNVSegmentVariantComposer extends GermlineCNVVariantC
      * @param refAutosomalCopyNumberState ref copy-number state on autosomal contigs
      * @param allosomalContigSet set of allosomal contigs (ref copy-number allele be chosen according to
      *                           given contig baseline copy-number states)
+     * @param reference may be null
      */
     public GermlineCNVSegmentVariantComposer(final VariantContextWriter outputWriter,
                                              final String sampleName,
                                              final IntegerCopyNumberState refAutosomalCopyNumberState,
-                                             final Set<String> allosomalContigSet) {
+                                             final Set<String> allosomalContigSet,
+                                             final ReferenceSequenceFile reference) {
         super(outputWriter, sampleName);
         this.refAutosomalCopyNumberState = Utils.nonNull(refAutosomalCopyNumberState);
         this.allosomalContigSet = Utils.nonNull(allosomalContigSet);
+        this.reference = reference;
     }
 
     @Override
@@ -125,7 +132,8 @@ public final class GermlineCNVSegmentVariantComposer extends GermlineCNVVariantC
         final String contig = segment.getContig();
         final int start = segment.getStart();
         final int end = segment.getEnd();
-        int copyNumberCall = segment.getCallIntegerCopyNumberState().getCopyNumber();
+        final int copyNumberCall = segment.getCallIntegerCopyNumberState().getCopyNumber();
+        final Allele refAllele = reference == null ? REF_ALLELE : Allele.create(ReferenceUtils.getRefBaseAtPosition(reference, contig, start), true);
 
         final VariantContextBuilder variantContextBuilder = new VariantContextBuilder();
         variantContextBuilder.chr(contig);
@@ -137,15 +145,7 @@ public final class GermlineCNVSegmentVariantComposer extends GermlineCNVVariantC
         final IntegerCopyNumberState refCopyNumber = allosomalContigSet.contains(contig)
                 ? segment.getBaselineIntegerCopyNumberState()
                 : refAutosomalCopyNumberState;
-        final Allele allele;
-        if (copyNumberCall > refCopyNumber.getCopyNumber()) {
-            allele = DUP_ALLELE;
-        } else if (copyNumberCall < refCopyNumber.getCopyNumber()) {
-            allele = DEL_ALLELE;
-        } else {
-            allele = REF_ALLELE;
-        }
-        genotypeBuilder.alleles(Collections.singletonList(allele));
+        genotypeBuilder.alleles(makeGenotypeAlleles(copyNumberCall, refCopyNumber.getCopyNumber(), refAllele));
         genotypeBuilder.attribute(CN, copyNumberCall);
         genotypeBuilder.attribute(NP, segment.getNumPoints());
         genotypeBuilder.attribute(QS, FastMath.round(segment.getQualitySomeCalled()));
@@ -154,14 +154,42 @@ public final class GermlineCNVSegmentVariantComposer extends GermlineCNVVariantC
         genotypeBuilder.attribute(QSE, FastMath.round(segment.getQualityEnd()));
         final Genotype genotype = genotypeBuilder.make();
 
-        final List<Allele> vcAlleles = new ArrayList<>(Collections.singletonList(REF_ALLELE));
-        if (!allele.equals(REF_ALLELE)) {
-            vcAlleles.add(allele);
-        }
-        variantContextBuilder.alleles(vcAlleles);
+        variantContextBuilder.alleles(genotype.getAlleles());
         variantContextBuilder.attribute(VCFConstants.END_KEY, end);
         variantContextBuilder.genotypes(genotype);
         variantContextBuilder.log10PError(segment.getQualitySomeCalled()/-10.0);
         return variantContextBuilder.make();
+    }
+
+    private List<Allele> makeGenotypeAlleles(final int copyNumberCall, final int refCopyNumber, final Allele refAllele) {
+        final List<Allele> returnAlleles = new ArrayList<>();
+        final Allele allele = getAlleleForCopyNumber(copyNumberCall, refCopyNumber, refAllele);
+        //for only one haplotype we know which allele it has
+        if (refCopyNumber == 1) {
+           return Arrays.asList(getAlleleForCopyNumber(copyNumberCall, refCopyNumber, refAllele));
+        //can't determine counts per haplotypes if there is a duplication
+        } else if (allele.equals(DUP_ALLELE)) {
+            return GATKVariantContextUtils.noCallAlleles(refCopyNumber);
+        //for DELs or REF
+        } else if (refCopyNumber == 2) {
+            returnAlleles.add(allele);
+            returnAlleles.add(allele);
+            return returnAlleles;
+        } else {
+            return GATKVariantContextUtils.noCallAlleles(refCopyNumber);
+        }
+
+    }
+
+    private Allele getAlleleForCopyNumber(final int copyNumberCall, final int refCopyNumber, final Allele refAllele) {
+        final Allele allele;
+        if (copyNumberCall > refCopyNumber) {
+            allele = DUP_ALLELE;
+        } else if (copyNumberCall < refCopyNumber) {
+            allele = DEL_ALLELE;
+        } else {
+            allele = refAllele;
+        }
+        return allele;
     }
 }
