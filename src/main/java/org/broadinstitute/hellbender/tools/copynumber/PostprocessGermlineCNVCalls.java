@@ -434,7 +434,8 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
         final GermlineCNVSegmentVariantComposer germlineCNVSegmentVariantComposer =
                 new GermlineCNVSegmentVariantComposer(segmentsVCFWriter, sampleName,
                         refAutosomalIntegerCopyNumberState, allosomalContigSet,
-                        ReferenceUtils.createReferenceReader(referenceArguments.getReferenceSpecifier()));
+                        referenceArguments.getReferenceSpecifier() == null ? null :
+                                ReferenceUtils.createReferenceReader(referenceArguments.getReferenceSpecifier()));
         germlineCNVSegmentVariantComposer.composeVariantContextHeader(sequenceDictionary, getDefaultToolVCFHeaderLines());
         germlineCNVSegmentVariantComposer.writeAll(integerCopyNumberSegmentCollection.getRecords());
         segmentsVCFWriter.close();

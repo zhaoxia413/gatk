@@ -12,8 +12,6 @@ import java.io.File;
 import java.util.Arrays;
 import java.util.List;
 
-import static org.testng.Assert.*;
-
 public class IntegerCopyNumberSegmentCollectionUnitTest extends GATKBaseTest {
     private static final File TEST_SUB_DIR = new File(toolsTestDir, "copynumber/formats/collections");
     public static final File TEST_INTEGER_COPY_NUMBER_SEGMENTS_FILE =

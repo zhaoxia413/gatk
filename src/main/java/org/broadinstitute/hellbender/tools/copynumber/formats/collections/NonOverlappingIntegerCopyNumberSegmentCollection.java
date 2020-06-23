@@ -19,12 +19,12 @@ import java.util.function.Function;
 public final class NonOverlappingIntegerCopyNumberSegmentCollection extends IntegerCopyNumberSegmentCollection {
     public NonOverlappingIntegerCopyNumberSegmentCollection(final File inputFile) {
         super(inputFile);
-        CopyNumberArgumentValidationUtils.validateNonOverlappingIntervals(getRecords());
+        CopyNumberArgumentValidationUtils.validateNonOverlappingIntervals(getRecords(), getMetadata().getSequenceDictionary());
     }
 
     NonOverlappingIntegerCopyNumberSegmentCollection(final SampleLocatableMetadata metadata,
                                                             final List<IntegerCopyNumberSegment> integerCopyNumberSegmentList) {
         super(metadata, integerCopyNumberSegmentList);
-        CopyNumberArgumentValidationUtils.validateNonOverlappingIntervals(getRecords());
+        CopyNumberArgumentValidationUtils.validateNonOverlappingIntervals(getRecords(), getMetadata().getSequenceDictionary());
     }
 }

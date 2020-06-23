@@ -7,6 +7,7 @@ import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.*;
 import org.apache.commons.math3.util.FastMath;
+import org.apache.hadoop.yarn.webapp.hamlet.Hamlet;
 import org.broadinstitute.hellbender.tools.copynumber.GermlineCNVCaller;
 import org.broadinstitute.hellbender.tools.copynumber.PostprocessGermlineCNVCalls;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.IntegerCopyNumberSegment;
@@ -154,7 +155,14 @@ public final class GermlineCNVSegmentVariantComposer extends GermlineCNVVariantC
         genotypeBuilder.attribute(QSE, FastMath.round(segment.getQualityEnd()));
         final Genotype genotype = genotypeBuilder.make();
 
-        variantContextBuilder.alleles(genotype.getAlleles());
+        final Set<Allele> uniquifiedAlleles = new HashSet<>();
+        uniquifiedAlleles.add(refAllele);
+        if (copyNumberCall > refCopyNumber.getCopyNumber()) {
+            uniquifiedAlleles.add(DUP_ALLELE);  //dupes need additional alts since their genotypes are no-call
+        } else if (copyNumberCall < refCopyNumber.getCopyNumber()) {
+            uniquifiedAlleles.add(DEL_ALLELE);  //dels may be no-call
+        }
+        variantContextBuilder.alleles(uniquifiedAlleles);
         variantContextBuilder.attribute(VCFConstants.END_KEY, end);
         variantContextBuilder.genotypes(genotype);
         variantContextBuilder.log10PError(segment.getQualitySomeCalled()/-10.0);
@@ -163,24 +171,45 @@ public final class GermlineCNVSegmentVariantComposer extends GermlineCNVVariantC
 
     private List<Allele> makeGenotypeAlleles(final int copyNumberCall, final int refCopyNumber, final Allele refAllele) {
         final List<Allele> returnAlleles = new ArrayList<>();
-        final Allele allele = getAlleleForCopyNumber(copyNumberCall, refCopyNumber, refAllele);
+        final Allele genotypeAllele = getAlleleForCopyNumber(copyNumberCall, refCopyNumber, refAllele);
+        //some allosomes like Y can have ref copy number zero, in which case we just no-call
+        if (refCopyNumber == 0) {
+            return GATKVariantContextUtils.noCallAlleles(1);
+        }
         //for only one haplotype we know which allele it has
         if (refCopyNumber == 1) {
            return Arrays.asList(getAlleleForCopyNumber(copyNumberCall, refCopyNumber, refAllele));
         //can't determine counts per haplotypes if there is a duplication
-        } else if (allele.equals(DUP_ALLELE)) {
+        } else if (genotypeAllele.equals(DUP_ALLELE)) {
             return GATKVariantContextUtils.noCallAlleles(refCopyNumber);
-        //for DELs or REF
+        //for homDels, hetDels or homRefs
         } else if (refCopyNumber == 2) {
-            returnAlleles.add(allele);
-            returnAlleles.add(allele);
+            returnAlleles.add(genotypeAllele);
+            if (copyNumberCall == 0) {
+                returnAlleles.add(genotypeAllele);
+            } else {
+                returnAlleles.add(refAllele);
+            }
             return returnAlleles;
+        //multiploid dels
         } else {
-            return GATKVariantContextUtils.noCallAlleles(refCopyNumber);
+            for (int i = 0; i < copyNumberCall; i++) {
+                returnAlleles.add(refAllele);
+            }
+            for (int i = copyNumberCall; i < refCopyNumber; i++) {
+                returnAlleles.add(DEL_ALLELE);
+            }
+            return returnAlleles;
         }
-
     }
 
+    /**
+     *
+     * @param copyNumberCall
+     * @param refCopyNumber
+     * @param refAllele
+     * @return variant allele if copyNumberCall != refCopyNumber, else refAllele
+     */
     private Allele getAlleleForCopyNumber(final int copyNumberCall, final int refCopyNumber, final Allele refAllele) {
         final Allele allele;
         if (copyNumberCall > refCopyNumber) {

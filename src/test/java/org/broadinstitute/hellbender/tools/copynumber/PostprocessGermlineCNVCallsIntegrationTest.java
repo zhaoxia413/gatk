@@ -235,8 +235,13 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
         //clustered VCF starts with chromosome 2 because all samples are ref over chr 1
         Assert.assertEquals(clusteredBreakpoints.getRight().get(0).getContig(), output.getRight().get(0).getContig());
 
-        //sample0 is all reference
-        Assert.assertTrue(output.getRight().stream().allMatch(vc -> vc.getGenotypes().get(0).isHomRef()));
+        //sample0 is all reference and female
+        //Y gets haploid no-call, X is ploidy 2
+        Assert.assertTrue(output.getRight().stream().allMatch(vc -> vc.getContig().equals("Y") ? vc.getGenotype(0).isNoCall() :
+                vc.getGenotype(0).isHomRef()));
+
+        Assert.assertTrue(output.getRight().stream().anyMatch(vc -> vc.getContig().equals("X") &&
+                vc.getGenotype(0).getPloidy() == 2));
 
         //all VCs should have matching start and end
         GATKBaseTest.assertCondition(clusteredBreakpoints.getRight(), output.getRight(), CHECK_VC_START);
@@ -246,11 +251,34 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
 
         //sample001 has a del and a dup on chromosome 2
         Assert.assertTrue(output2.getRight().stream().anyMatch(vc -> vc.getContig().equals("2") &&
-                vc.getAlternateAllele(0).equals(GermlineCNVSegmentVariantComposer.DEL_ALLELE) && vc.getGenotypes().get(0).isHomVar() && //calls are "haploid"
+                vc.getAlternateAllele(0).equals(GermlineCNVSegmentVariantComposer.DEL_ALLELE) &&
+                vc.getGenotype(0).getPloidy() == 2 &&
+                vc.getGenotype(0).isHomVar() && //calls are diploid homVar because CN0
                 vc.getGenotype(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString().equals("0")));
+
         Assert.assertTrue(output2.getRight().stream().anyMatch(vc -> vc.getContig().equals("2") &&
-                vc.getAlternateAllele(0).equals(GermlineCNVSegmentVariantComposer.DUP_ALLELE) && vc.getGenotypes().get(0).isHomVar() && //calls are "haploid"
+                vc.getAlternateAllele(0).equals(GermlineCNVSegmentVariantComposer.DUP_ALLELE) &&
+                vc.getGenotypes().get(0).isNoCall() &&
+                vc.getGenotype(0).getPloidy() == 2 && //dupes on autosomes are diploid no-call
                 vc.getGenotype(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString().equals("4")));
+
+        Assert.assertTrue(output2.getRight().stream().anyMatch(vc -> vc.getContig().equals("X") &&
+                vc.getAlternateAllele(0).equals(GermlineCNVSegmentVariantComposer.DUP_ALLELE) &&
+                vc.getGenotypes().get(0).isHomVar() &&
+                vc.getGenotype(0).getPloidy() == 1 && //dupes on autosomes are diploid no-call
+                vc.getGenotype(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString().equals("3")));
+
+        Assert.assertTrue(output2.getRight().stream().anyMatch(vc -> vc.getContig().equals("X") &&
+                vc.getAlternateAllele(0).equals(GermlineCNVSegmentVariantComposer.DUP_ALLELE) &&
+                vc.getGenotypes().get(0).isHomVar() &&
+                vc.getGenotype(0).getPloidy() == 1 && //dupes on autosomes are diploid no-call
+                vc.getGenotype(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString().equals("4")));
+
+        Assert.assertTrue(output2.getRight().stream().anyMatch(vc -> vc.getContig().equals("Y") &&
+                vc.getAlternateAllele(0).equals(GermlineCNVSegmentVariantComposer.DUP_ALLELE) &&
+                vc.getGenotypes().get(0).isHomVar() &&
+                vc.getGenotype(0).getPloidy() == 1 && //dupes on haploid allosomes are homVar
+                vc.getGenotype(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString().equals("3")));
 
         //compare sample001 with new QUALs against its single-sample segmented results
         // should have same Q score where breakpoints match, zero if breakpoint was moved in clustering
@@ -272,6 +300,8 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
                 }
             }
         }
+
+        //TODO: test with input reference and check ref alleles
     }
 
     @DataProvider(name = "differentValidInput")

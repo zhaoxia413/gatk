@@ -159,7 +159,8 @@ public class JointCNVSegmentation extends MultiVariantWalkerGroupedOnStart {
 
     private void write(final List<SVCallRecordWithEvidence> calls) {
         final List<VariantContext> sortedCalls = calls.stream()
-                .sorted(Comparator.comparing(c -> c.getStartAsInterval(), IntervalUtils.getDictionaryOrderComparator(dictionary)))
+                .sorted(Comparator.comparing(c -> new SimpleInterval(c.getContig(), c.getStart(), c.getEnd()), //VCs have to be sorted by end as well
+                        IntervalUtils.getDictionaryOrderComparator(dictionary)))
                 .map(this::buildVariantContext)
                 .collect(Collectors.toList());
         Iterator<VariantContext> it = sortedCalls.iterator();
