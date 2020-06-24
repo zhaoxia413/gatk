@@ -1,5 +1,8 @@
 package org.broadinstitute.hellbender.tools;
 
+import htsjdk.samtools.Cigar;
+import htsjdk.samtools.CigarElement;
+import htsjdk.samtools.CigarOperator;
 import htsjdk.samtools.SAMUtils;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.BetaFeature;
@@ -44,6 +47,8 @@ public class LocalAssembler extends PairWalker {
     @Override public boolean requiresIntervals() { return true; }
 
     @Override public void apply( final GATKRead read, final GATKRead mate ) {
+        // TODO: trim short-fragment overhangs
+        trimOverruns(read, mate);
         reads.add(read);
         reads.add(mate);
     }
@@ -86,6 +91,55 @@ public class LocalAssembler extends PairWalker {
         writePaths(readPaths, output + ".paths.txt.gz");
         writeReads(reads, output + ".reads.fastq.gz");
         return null;
+    }
+
+    /** trim read pairs of base calls that have gone past the end of a short fragment */
+    private void trimOverruns( final GATKRead read, final GATKRead mate ) {
+        // if both mapped and they're on different strands
+        if ( !read.isUnmapped() && !mate.isUnmapped() && read.isReverseStrand() != mate.isReverseStrand() ) {
+            // and both start within 1 base on the ref
+            if ( Math.abs(read.getStart() - read.getMateStart()) <= 1 ) {
+                // and both end within 1 base
+                if ( Math.abs(read.getCigar().getReferenceLength() - mate.getCigar().getReferenceLength()) <= 1 ) {
+                    if ( mate.isReverseStrand() ) {
+                        trimClips(read, mate);
+                    } else {
+                        trimClips(mate, read);
+                    }
+                }
+            }
+        }
+    }
+
+    private void trimClips( final GATKRead fwd, final GATKRead rev ) {
+        final List<CigarElement> fwdElements = fwd.getCigarElements();
+        final List<CigarElement> revElements = rev.getCigarElements();
+        final int lastElementIdx = fwdElements.size() - 1;
+        final CigarElement fwdLastElement = fwdElements.get(lastElementIdx);
+        final CigarElement revFirstElement = revElements.get(0);
+        if ( fwdLastElement.getOperator() == CigarOperator.S && revFirstElement.getOperator() == CigarOperator.S ) {
+            final byte[] fwdBases = fwd.getBasesNoCopy();
+            final int lastElementLen = fwdLastElement.getLength();
+            fwd.setBases(Arrays.copyOfRange(fwdBases, 0, fwdBases.length - lastElementLen));
+            final byte[] fwdQuals = fwd.getBaseQualitiesNoCopy();
+            if ( fwdQuals.length > 0 ) {
+                fwd.setBaseQualities(Arrays.copyOfRange(fwdQuals, 0, fwdQuals.length - lastElementLen));
+            }
+            final List<CigarElement> newFwdElements = new ArrayList<>(fwdElements);
+            newFwdElements.set(lastElementIdx, new CigarElement(lastElementLen, CigarOperator.H));
+            fwd.setCigar(new Cigar(newFwdElements));
+
+            final byte[] revBases = rev.getBasesNoCopy();
+            final int firstElementLen = revFirstElement.getLength();
+            rev.setBases(Arrays.copyOfRange(revBases, firstElementLen, revBases.length));
+            final byte[] revQuals = rev.getBaseQualitiesNoCopy();
+            if ( revQuals.length > 0 ) {
+                rev.setBaseQualities(Arrays.copyOfRange(revQuals, firstElementLen, revQuals.length));
+            }
+            final List<CigarElement> newRevElements = new ArrayList<>(revElements);
+            newRevElements.set(0, new CigarElement(firstElementLen, CigarOperator.H));
+            rev.setCigar(new Cigar(newRevElements));
+        }
     }
 
     private void kmerizeReads( final KmerSet<KmerAdjacency> kmerAdjacencySet ) {
@@ -557,6 +611,25 @@ public class LocalAssembler extends PairWalker {
             }
         }
 
+        // look for transits that haven't been traced
+        for ( final Map.Entry<Contig, List<TransitPairCount>> entry : contigTransitsMap.entrySet() ) {
+            for ( final TransitPairCount tpc : entry.getValue() ) {
+                if ( tpc.getCount() > 0 ) {
+                    final Contig contig = entry.getKey();
+                    final Set<Traversal> fwdTraversalSet = new HashSet<>();
+                    traverse(tpc.getContig2(), contig, contigsList, contigTransitsMap, fwdTraversalSet);
+                    final Set<Traversal> revTraversalSet = new HashSet<>();
+                    traverse(tpc.getContig1().rc(), contig.rc(), contigsList, contigTransitsMap, revTraversalSet);
+                    for ( final Traversal revTraversal : revTraversalSet ) {
+                        final Traversal revTraversalRC = revTraversal.rc();
+                        for ( final Traversal fwdTraversal : fwdTraversalSet ) {
+                            traversalSet.add(Traversal.combine(revTraversalRC, fwdTraversal));
+                        }
+                    }
+                }
+            }
+        }
+
         return traversalSet;
     }
 
@@ -566,12 +639,12 @@ public class LocalAssembler extends PairWalker {
                                   final Map<Contig, List<TransitPairCount>> contigTransitsMap,
                                   final Set<Traversal> traversalSet ) {
         contigsList.addLast(predecessor);
-        final List<TransitPairCount> transits =
-                contigsList.contains(contig) ? null : contigTransitsMap.get(contig);
+        final List<TransitPairCount> transits = contigsList.contains(contig) ? null : contigTransitsMap.get(contig);
         boolean done = false;
         if ( transits != null ) {
             for ( final TransitPairCount tpc : transits ) {
                 if ( tpc.getContig1() == predecessor ) {
+                    tpc.resetCount();
                     traverse(tpc.getContig2(), contig, contigsList, contigTransitsMap, traversalSet);
                     done = true;
                 }
@@ -1564,6 +1637,8 @@ public class LocalAssembler extends PairWalker {
         public Contig getContig1() { return contig1; }
         public Contig getContig2() { return contig2; }
         public void observe() { count += 1; }
+        public void resetCount() { count = 0; }
+        public int getCount() { return count; }
 
         @Override public boolean equals( final Object obj ) {
             if ( !(obj instanceof TransitPairCount) ) return false;
@@ -1610,6 +1685,14 @@ public class LocalAssembler extends PairWalker {
             if ( !(obj instanceof Traversal) ) return false;
             final Traversal that = (Traversal)obj;
             return contigs.equals(that.contigs);
+        }
+
+        public static Traversal combine( final Traversal trav1, final Traversal trav2 ) {
+            final int len2 = trav2.contigs.size();
+            final List<Contig> combinedList = new ArrayList<>(trav1.contigs.size() + len2 - 1);
+            combinedList.addAll(trav1.contigs);
+            combinedList.addAll(trav2.contigs.subList(1, len2));
+            return new Traversal(combinedList);
         }
     }
 }

@@ -7,6 +7,7 @@ import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureContext;
+import org.broadinstitute.hellbender.engine.GATKPath;
 import org.broadinstitute.hellbender.engine.ReadWalker;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
@@ -31,7 +32,7 @@ public class PrintDistantMates extends ReadWalker {
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="Write output to this file")
-    public String output;
+    public GATKPath output;
 
     private SAMFileGATKReadWriter outputWriter;
     private Map<String, GATKRead> pendingReads;
@@ -55,7 +56,7 @@ public class PrintDistantMates extends ReadWalker {
 
     @Override
     public void onTraversalStart() {
-        outputWriter = createSAMWriter(IOUtils.getPath(output), false);
+        outputWriter = createSAMWriter(output, false);
         pendingReads = new HashMap<>(20000000);
     }
 
