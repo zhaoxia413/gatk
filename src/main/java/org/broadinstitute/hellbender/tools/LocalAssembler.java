@@ -36,6 +36,7 @@ public class LocalAssembler extends PairWalker {
     public static final byte QMIN = 25;
     public static final int MIN_THIN_OBS = 4;
     public static final int MIN_GAPFILL_COUNT = 3;
+    public static final int TOO_MANY_TRAVERSALS = 100000;
 
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
@@ -47,7 +48,6 @@ public class LocalAssembler extends PairWalker {
     @Override public boolean requiresIntervals() { return true; }
 
     @Override public void apply( final GATKRead read, final GATKRead mate ) {
-        // TODO: trim short-fragment overhangs
         trimOverruns(read, mate);
         reads.add(read);
         reads.add(mate);
@@ -82,8 +82,18 @@ public class LocalAssembler extends PairWalker {
 
         final List<Path> readPaths = pathReads(kmerAdjacencySet);
         final Map<Contig,List<TransitPairCount>> contigTransitsMap = collectTransitPairCounts(contigs, readPaths);
-        final Collection<Traversal> allTraversals = traverseAllPaths(contigs, contigTransitsMap);
-        writeTraversals(allTraversals, output + ".traversals.fa.gz");
+        final String traversalsFilename = output + ".traversals.fa.gz";
+        try {
+            final Collection<Traversal> allTraversals = traverseAllPaths(contigs, contigTransitsMap);
+            writeTraversals(allTraversals, traversalsFilename);
+        } catch ( final AssemblyTooComplexException x ) {
+            logger.warn("Assembly too complex.  Writing contigs as traversals in " + traversalsFilename + ".");
+            final Collection<Traversal> contigTraversals = new ArrayList<>(contigs.size());
+            for ( final Contig contig : contigs ) {
+                contigTraversals.add(new Traversal(Collections.singletonList(contig)));
+            }
+            writeTraversals(contigTraversals, traversalsFilename);
+        }
 
         contigs.sort(Comparator.comparingInt(ContigImpl::getId));
         writeDOT(contigs, output + ".assembly.dot");
@@ -662,6 +672,9 @@ public class LocalAssembler extends PairWalker {
         final Traversal traversal = new Traversal(contigsList);
         if ( !traversalSet.contains(traversal.rc()) ) {
             traversalSet.add(traversal);
+            if ( traversalSet.size() >= TOO_MANY_TRAVERSALS ) {
+                throw new AssemblyTooComplexException();
+            }
         }
     }
 
@@ -1694,5 +1707,8 @@ public class LocalAssembler extends PairWalker {
             combinedList.addAll(trav2.contigs.subList(1, len2));
             return new Traversal(combinedList);
         }
+    }
+
+    public final static class AssemblyTooComplexException extends RuntimeException {
     }
 }
