@@ -38,10 +38,13 @@ public class LocalAssembler extends PairWalker {
     public static final int MIN_GAPFILL_COUNT = 3;
     public static final int TOO_MANY_TRAVERSALS = 100000;
 
-    @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
-            shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
-            doc="Write output to this file")
-    public String output;
+    @Argument(fullName=StandardArgumentDefinitions.OUTPUT_LONG_NAME,
+            shortName=StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
+            doc="Write outputs to this file name prefix", optional = true)
+    public static String output;
+
+    @Argument(fullName="assembly-name", doc="name of assembly used as a prefix for traversal names")
+    public static String assemblyName;
 
     private final List<GATKRead> reads = new ArrayList<>();
 
@@ -80,9 +83,10 @@ public class LocalAssembler extends PairWalker {
 
         markCycles(contigs);
 
+        final String outputFilePrefix = output != null ? output : assemblyName;
         final List<Path> readPaths = pathReads(kmerAdjacencySet);
         final Map<Contig,List<TransitPairCount>> contigTransitsMap = collectTransitPairCounts(contigs, readPaths);
-        final String traversalsFilename = output + ".traversals.fa.gz";
+        final String traversalsFilename = outputFilePrefix + ".traversals.fa.gz";
         try {
             final Collection<Traversal> allTraversals = traverseAllPaths(contigs, contigTransitsMap);
             writeTraversals(allTraversals, traversalsFilename);
@@ -96,10 +100,10 @@ public class LocalAssembler extends PairWalker {
         }
 
         contigs.sort(Comparator.comparingInt(ContigImpl::getId));
-        writeDOT(contigs, output + ".assembly.dot");
-        writeContigs(contigs, output + ".contigs.txt.gz");
-        writePaths(readPaths, output + ".paths.txt.gz");
-        writeReads(reads, output + ".reads.fastq.gz");
+        writeDOT(contigs, outputFilePrefix + ".assembly.dot");
+        writeContigs(contigs, outputFilePrefix + ".contigs.txt.gz");
+        writePaths(readPaths, outputFilePrefix + ".paths.txt.gz");
+        writeReads(reads, outputFilePrefix + ".reads.fastq.gz");
         return null;
     }
 
@@ -791,8 +795,16 @@ public class LocalAssembler extends PairWalker {
 
     private static void writeTraversals( final Collection<Traversal> traversals, final String fileName ) {
         try ( final BufferedWriter writer = makeGZFile(fileName) ) {
+            int traversalNo = 0;
             for ( final Traversal traversal : traversals ) {
                 writer.write(">");
+                if ( assemblyName != null ) {
+                    writer.write(assemblyName);
+                    writer.write("_");
+                }
+                writer.write("t");
+                writer.write(Integer.toString(++traversalNo));
+                writer.write(" ");
                 writer.write(traversal.getName());
                 writer.newLine();
                 writer.write(traversal.getSequence());
@@ -1710,5 +1722,6 @@ public class LocalAssembler extends PairWalker {
     }
 
     public final static class AssemblyTooComplexException extends RuntimeException {
+        static final long serialVersionUID = -1L;
     }
 }
